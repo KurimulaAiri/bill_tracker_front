@@ -11,26 +11,31 @@
         </el-select>
         <el-button type="primary" size="small" @click="load(1)">查询</el-button>
         <div class="spacer" />
+        <el-button size="small" type="danger" plain :disabled="!selectedRows.length" @click="batchDelete">
+          批量删除{{ selectedRows.length ? `(${selectedRows.length})` : '' }}
+        </el-button>
+        <el-button size="small" type="danger" plain @click="condDialogVisible = true">条件删除</el-button>
         <el-button size="small" type="success" @click="dialogVisible = true">手工记账</el-button>
       </div>
     </template>
 
-    <el-table :data="items" size="small">
+    <el-table :data="items" size="small" @selection-change="onSelectionChange">
+      <el-table-column type="selection" width="44" />
       <el-table-column label="时间" width="160">
         <template #default="{ row }">{{ formatTime(row.billDate) }}</template>
       </el-table-column>
       <el-table-column label="金额" width="120">
         <template #default="{ row }">
-          <span :class="row.billType === 'expense' ? 'expense' : 'income'">
-            {{ row.billType === 'expense' ? '-' : '+' }}{{ centsToYuan(Math.abs(Number(row.amount))) }}
-          </span>
+          <span v-if="row.billType === 'expense'" class="expense">-{{ centsToYuan(Math.abs(Number(row.amount))) }}</span>
+          <span v-else-if="row.billType === 'income'" class="income">+{{ centsToYuan(Math.abs(Number(row.amount))) }}</span>
+          <span v-else class="neutral-text">{{ centsToYuan(Math.abs(Number(row.amount))) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="类型" width="80">
+      <el-table-column label="类型" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.billType === 'income' ? 'success' : row.billType === 'expense' ? 'danger' : 'info'" size="small">
-            {{ row.billType === 'income' ? '收入' : row.billType === 'expense' ? '支出' : '中性' }}
-          </el-tag>
+          <el-tag v-if="row.billType === 'income'" type="success" size="small">收入</el-tag>
+          <el-tag v-else-if="row.billType === 'expense'" type="danger" size="small">支出</el-tag>
+          <span v-else class="neutral-text">不计收支</span>
         </template>
       </el-table-column>
       <el-table-column label="分类" width="100">
@@ -91,13 +96,47 @@
         <el-button type="primary" @click="submitBill">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 条件删除 -->
+    <el-dialog v-model="condDialogVisible" title="条件删除账单" width="480px">
+      <el-alert type="warning" :closable="false" show-icon title="将删除符合以下条件的全部账单，请谨慎操作" style="margin-bottom: 14px" />
+      <el-form :model="condForm" label-width="80px">
+        <el-form-item label="时间范围">
+          <el-date-picker v-model="condForm.range" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="收支类型">
+          <el-select v-model="condForm.billType" placeholder="全部类型" clearable style="width: 100%">
+            <el-option label="收入" value="income" />
+            <el-option label="支出" value="expense" />
+            <el-option label="中性" value="neutral" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="来源">
+          <el-select v-model="condForm.source" placeholder="全部来源" clearable style="width: 100%">
+            <el-option v-for="(label, key) in sourceMap" :key="key" :label="label" :value="key" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="分类">
+          <el-select v-model="condForm.categoryId" placeholder="全部分类" clearable style="width: 100%">
+            <el-option v-for="c in categories" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注包含">
+          <el-input v-model="condForm.keyword" placeholder="备注关键词（可选）" clearable />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="condDialogVisible = false">取消</el-button>
+        <el-button type="danger" plain @click="deleteByCondition">确认删除</el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { fetchBills, createBill, deleteBill } from '../api/bills';
+import { fetchBills, createBill, deleteBill, batchDeleteBills, deleteBillsByCondition } from '../api/bills';
 import { fetchAccounts } from '../api/accounts';
 import { fetchCategories } from '../api/categories';
 import { centsToYuan, formatTime, yuanToCentsStr } from '../utils/format';
@@ -114,6 +153,13 @@ const accounts = ref<any[]>([]);
 const categories = ref<any[]>([]);
 const dialogVisible = ref(false);
 const form = reactive({ billType: 'expense', yuan: 0, categoryId: undefined, accountId: undefined, note: '' });
+const selectedRows = ref<any[]>([]);
+const condDialogVisible = ref(false);
+const condForm = reactive<{ range: [Date, Date] | null; billType?: string; source?: string; categoryId?: string; keyword?: string }>({ range: null });
+
+function onSelectionChange(rows: any[]) {
+  selectedRows.value = rows;
+}
 
 async function load(p = 1) {
   page.value = p;
@@ -152,6 +198,40 @@ async function remove(row: any) {
   load(page.value);
 }
 
+async function batchDelete() {
+  const ids = selectedRows.value.map((r) => r.id);
+  if (!ids.length) return;
+  await ElMessageBox.confirm(`确定删除选中的 ${ids.length} 条账单吗？`, '批量删除', { type: 'warning' });
+  const res: any = await batchDeleteBills(ids);
+  ElMessage.success(`已删除 ${res.removed} 条`);
+  selectedRows.value = [];
+  load(page.value);
+}
+
+async function deleteByCondition() {
+  const cond: any = {};
+  if (condForm.range && condForm.range[0] && condForm.range[1]) {
+    cond.start = condForm.range[0].toISOString();
+    cond.end = condForm.range[1].toISOString();
+  }
+  if (condForm.billType) cond.billType = condForm.billType;
+  if (condForm.source) cond.source = condForm.source;
+  if (condForm.categoryId) cond.categoryId = condForm.categoryId;
+  if (condForm.keyword) cond.keyword = condForm.keyword;
+  const desc = [cond.start && '时间', cond.billType && '类型', cond.source && '来源', cond.categoryId && '分类', cond.keyword && '备注'].filter(Boolean).join('、');
+  await ElMessageBox.confirm(
+    `将删除${desc ? `符合「${desc}」条件的` : '全部'}账单，此操作不可恢复。是否继续？`,
+    '条件删除',
+    { type: 'warning', confirmButtonText: '确认删除' },
+  );
+  const res: any = await deleteBillsByCondition(cond);
+  ElMessage.success(`已删除 ${res.removed} 条`);
+  condDialogVisible.value = false;
+  Object.assign(condForm, { range: null, billType: undefined, source: undefined, categoryId: undefined, keyword: '' });
+  selectedRows.value = [];
+  load(1);
+}
+
 onMounted(async () => {
   accounts.value = (await fetchAccounts()) as unknown as any[];
   categories.value = (await fetchCategories()) as unknown as any[];
@@ -166,4 +246,5 @@ onMounted(async () => {
 .pager { margin-top: 12px; justify-content: flex-end; }
 .expense { color: #e6a23c; font-weight: 600; }
 .income { color: #67c23a; font-weight: 600; }
+.neutral-text { color: #a8abb2; font-size: 12px; }
 </style>

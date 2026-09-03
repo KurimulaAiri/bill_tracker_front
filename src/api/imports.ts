@@ -1,13 +1,6 @@
 import request from '../utils/request';
 
-export function uploadBillFile(file: File) {
-  const form = new FormData();
-  form.append('file', file);
-  return request.post('/imports/upload', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000,
-  });
-}
+// 账单文件已改为浏览器本地解析（见 src/imports），原始文件不再上传服务器
 
 export function confirmImport(payload: any) {
   return request.post('/imports/confirm', payload);
@@ -19,4 +12,9 @@ export function fetchBatches() {
 
 export function fetchBatchDetail(id: string) {
   return request.get(`/imports/batches/${id}`);
+}
+
+/** 手动去重：清理数据库中重复账单 */
+export function dedupeBills() {
+  return request.post('/imports/dedupe');
 }

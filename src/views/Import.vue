@@ -52,14 +52,16 @@
         </el-table-column>
         <el-table-column label="金额" width="110">
           <template #default="{ row }">
-            <span :class="row.amountCents < 0 ? 'expense' : 'income'">{{ row.amountCents < 0 ? '-' : '+' }}{{ centsToYuan(Math.abs(Number(row.amountCents))) }}</span>
+            <span v-if="row.billType === 'expense'" class="expense">-{{ centsToYuan(Math.abs(Number(row.amountCents))) }}</span>
+            <span v-else-if="row.billType === 'income'" class="income">+{{ centsToYuan(Math.abs(Number(row.amountCents))) }}</span>
+            <span v-else class="neutral-text">{{ centsToYuan(Math.abs(Number(row.amountCents))) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="收支" width="80">
           <template #default="{ row }">
-            <el-tag :type="row.billType === 'income' ? 'success' : row.billType === 'expense' ? 'danger' : 'info'" size="small">
-              {{ row.billType === 'income' ? '收入' : row.billType === 'expense' ? '支出' : '中性' }}
-            </el-tag>
+            <el-tag v-if="row.billType === 'income'" type="success" size="small">收入</el-tag>
+            <el-tag v-else-if="row.billType === 'expense'" type="danger" size="small">支出</el-tag>
+            <span v-else class="neutral-text">不计收支</span>
           </template>
         </el-table-column>
         <el-table-column label="分类" width="160">
@@ -88,7 +90,12 @@
 
     <!-- 批次历史 -->
     <el-card class="step-card">
-      <template #header>导入批次历史</template>
+      <template #header>
+        <div class="preview-header">
+          <span>导入批次历史</span>
+          <el-button type="warning" plain :loading="deduping" @click="onDedupe">清理重复账单</el-button>
+        </div>
+      </template>
       <el-table :data="batches" size="small">
         <el-table-column prop="fileName" label="文件名" min-width="200" />
         <el-table-column label="来源" width="120">
@@ -101,16 +108,51 @@
         <el-table-column label="时间" width="170">
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
         </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="viewDetail(row)">查看详情</el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- 批次详情 -->
+    <el-dialog v-model="detailVisible" title="导入批次详情" width="640px">
+      <el-descriptions v-if="detail" :column="2" border size="small">
+        <el-descriptions-item label="文件名" :span="2">{{ detail.batch.fileName }}</el-descriptions-item>
+        <el-descriptions-item label="来源">{{ sourceLabel(detail.batch.source) }}</el-descriptions-item>
+        <el-descriptions-item label="导入时间">{{ formatTime(detail.batch.createdAt) }}</el-descriptions-item>
+        <el-descriptions-item label="总笔数">{{ detail.batch.total }}</el-descriptions-item>
+        <el-descriptions-item label="成功">{{ detail.batch.success }}</el-descriptions-item>
+        <el-descriptions-item label="跳过">{{ detail.batch.skipped }}</el-descriptions-item>
+        <el-descriptions-item label="失败">{{ detail.batch.failed }}</el-descriptions-item>
+      </el-descriptions>
+
+      <div v-if="detail && detail.failures.length" class="failure-block">
+        <div class="failure-title">
+          <el-tag type="danger" size="small">失败明细 {{ detail.failures.length }} 条</el-tag>
+        </div>
+        <el-table :data="detail.failures" size="small" max-height="260">
+          <el-table-column label="行号" width="80" prop="rowNo" />
+          <el-table-column label="失败原因" min-width="160" prop="reason" />
+          <el-table-column label="原始数据" min-width="220">
+            <template #default="{ row }">
+              <span class="raw-cell" :title="JSON.stringify(row.raw)">{{ JSON.stringify(row.raw) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <el-empty v-else-if="detail" description="该批次无失败记录" :image-size="60" />
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { UploadFilled } from '@element-plus/icons-vue';
-import { uploadBillFile, confirmImport as submitConfirmImport, fetchBatches } from '../api/imports';
+import { confirmImport as submitConfirmImport, fetchBatches, dedupeBills, fetchBatchDetail } from '../api/imports';
+import { parseBillFile } from '../imports';
 import { fetchAccounts } from '../api/accounts';
 import { fetchCategories } from '../api/categories';
 import { centsToYuan, formatTime } from '../utils/format';
@@ -137,10 +179,13 @@ async function parseFile() {
   if (!selectedFile.value) return;
   parsing.value = true;
   try {
-    const res: any = await uploadBillFile(selectedFile.value);
-    if (res.error) { ElMessage.error(res.error); return; }
+    // 浏览器本地解析，原始文件不上传服务器
+    const res: any = await parseBillFile(selectedFile.value);
     parseData.value = res;
     result.value = null;
+  } catch (e: any) {
+    ElMessage.error(e?.message || '解析失败');
+    parseData.value = null;
   } finally {
     parsing.value = false;
   }
@@ -179,6 +224,31 @@ async function loadBatches() {
   batches.value = (await fetchBatches()) as unknown as any[];
 }
 
+const detailVisible = ref(false);
+const detail = ref<any>(null);
+async function viewDetail(row: any) {
+  detail.value = await fetchBatchDetail(row.id);
+  detailVisible.value = true;
+}
+
+const deduping = ref(false);
+async function onDedupe() {
+  const ok = await ElMessageBox.confirm(
+    '将按平台交易单号/内容指纹清理重复账单，每类只保留最早一条。是否继续？',
+    '确认去重',
+    { type: 'warning', confirmButtonText: '去重', cancelButtonText: '取消' },
+  ).catch(() => false);
+  if (!ok) return;
+  deduping.value = true;
+  try {
+    const res: any = await dedupeBills();
+    ElMessage.success(`去重完成：删除 ${res.removed} 条重复记录`);
+    loadBatches();
+  } finally {
+    deduping.value = false;
+  }
+}
+
 onMounted(async () => {
   accounts.value = (await fetchAccounts()) as unknown as any[];
   categories.value = (await fetchCategories()) as unknown as any[];
@@ -195,4 +265,8 @@ onMounted(async () => {
 .preview-header { display: flex; justify-content: space-between; align-items: center; }
 .expense { color: #e6a23c; font-weight: 600; }
 .income { color: #67c23a; font-weight: 600; }
+.neutral-text { color: #a8abb2; font-size: 12px; }
+.failure-block { margin-top: 14px; }
+.failure-title { margin-bottom: 8px; }
+.raw-cell { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
