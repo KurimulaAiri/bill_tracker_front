@@ -3,3 +3,6 @@ dist
 .env.local
 *.log
 pnpm-debug.log*
+
+/.vscode
+/.idea
