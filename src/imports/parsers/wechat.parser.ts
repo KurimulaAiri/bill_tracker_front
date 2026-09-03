@@ -39,10 +39,13 @@ export class WechatParser extends BaseParser {
     const cPayMethod = idx('支付方式');
     const cStatus = idx('当前状态');
     const cExternalId = idx('交易单号');
+    const cMerchantNo = idx('商户单号');
     const cRemark = idx('备注');
 
     const bills: NormalizedBill[] = [];
     const skipped: { row: number; reason: string }[] = [];
+    // 已被命名列覆盖的列名，其余列统一进 extraJson
+    const namedCols = new Set(['交易时间', '交易类型', '交易对方', '商品', '收/支', '金额(元)', '支付方式', '当前状态', '交易单号', '商户单号']);
 
     for (let r = headerIdx + 1; r < rows.length; r++) {
       const row = rows[r];
@@ -65,7 +68,9 @@ export class WechatParser extends BaseParser {
         time = this.excelDateToIso(rawTime);
       }
 
-      const remark = get(cRemark) || get(cProduct);
+      // 微信导出时无备注的"备注"列填充占位符 "/"，需忽略；此时回退到商品名
+      const remarkRaw = get(cRemark);
+      const remark = remarkRaw && remarkRaw !== '/' ? remarkRaw : get(cProduct) || undefined;
 
       bills.push({
         time,
@@ -76,6 +81,10 @@ export class WechatParser extends BaseParser {
         remark: remark || undefined,
         accountHint: get(cPayMethod) || undefined,
         counterParty: get(cCounterParty) || undefined,
+        merchantNo: get(cMerchantNo) || undefined,
+        payMethod: get(cPayMethod) || undefined,
+        status: get(cStatus) || undefined,
+        extraJson: this.buildExtra(header, row, namedCols),
         externalId: get(cExternalId) || undefined,
         rawData: row,
       });

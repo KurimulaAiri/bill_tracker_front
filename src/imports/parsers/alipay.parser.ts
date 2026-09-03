@@ -32,15 +32,19 @@ export class AlipayParser extends BaseParser {
     const cTime = idx('交易时间');
     const cCategory = idx('交易分类');
     const cCounterParty = idx('交易对方');
+    const cCounterpartyAccount = idx('对方账号');
     const cProduct = idx('商品说明');
     const cFlow = idx('收/支');
     const cAmount = idx('金额');
     const cPayMethod = idx('收/付款方式');
     const cStatus = idx('交易状态');
     const cExternalId = idx('交易订单号');
+    const cMerchantNo = idx('商家订单号');
 
     const bills: NormalizedBill[] = [];
     const skipped: { row: number; reason: string }[] = [];
+    // 已被命名列覆盖的列名，其余列统一进 extraJson
+    const namedCols = new Set(['交易时间', '交易分类', '交易对方', '对方账号', '商品说明', '收/支', '金额', '收/付款方式', '交易状态', '交易订单号', '商家订单号']);
 
     for (let r = headerIdx + 1; r < lines.length; r++) {
       const line = lines[r].trim();
@@ -71,6 +75,11 @@ export class AlipayParser extends BaseParser {
         remark: get(cProduct) || undefined,
         accountHint: get(cPayMethod) || undefined,
         counterParty: get(cCounterParty) || undefined,
+        counterpartyAccount: get(cCounterpartyAccount) || undefined,
+        merchantNo: get(cMerchantNo) || undefined,
+        payMethod: get(cPayMethod) || undefined,
+        status: get(cStatus) || undefined,
+        extraJson: this.buildExtra(header, cols, namedCols),
         externalId: get(cExternalId) || undefined,
         rawData: cols,
       });

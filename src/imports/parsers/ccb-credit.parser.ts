@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import { BaseParser } from '../base';
 import type { ReducedParse } from '../base';
 import type { NormalizedBill } from '../types';
-import { extractPdfTextBytes } from '../pdf';
+import { extractPdfTexts } from '../pdf';
 import { decodeGbk } from '../encoding';
 
 // 建行信用卡交易明细 PDF（文本型）或导出的 Excel
@@ -22,7 +22,7 @@ export class CcbCreditParser extends BaseParser {
 
     if (lower.endsWith('.pdf')) {
       // PDF: 文本流提取（中文摘要无法还原时置空）
-      const text = extractPdfTextBytes(bytes).join('\n');
+      const text = extractPdfTexts(bytes).join('\n');
       this.parsePdfText(text, bills, skipped, (v) => (cardNumber = v));
     } else {
       // Excel 兜底
@@ -31,6 +31,9 @@ export class CcbCreditParser extends BaseParser {
       const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
       this.parseRows(rows, bills, skipped, (v) => (cardNumber = v));
     }
+
+    // 文件级卡号（后四位）回填到每条记录
+    if (cardNumber) for (const b of bills) b.cardNo = cardNumber;
 
     return { bills, skipped, accountHint: cardNumber };
   }
@@ -103,6 +106,20 @@ export class CcbCreditParser extends BaseParser {
     }
   }
 
+  // 解码 PDF Tj 文本：该 PDF 使用 /STSong-Light-UniGB-UCS2-H 字体（UTF-16BE）
+  // 以 UTF-16BE 为主；若控制字符占比过高（非 UCS2 文本）则回退 GBK
+  private decodePdfText(bytes: number[]): string {
+    let u16 = '';
+    let ctrl = 0;
+    for (let i = 0; i + 1 < bytes.length; i += 2) {
+      const ch = ((bytes[i] & 0xff) << 8) | (bytes[i + 1] & 0xff);
+      if (ch < 0x20 && ch !== 0x09 && ch !== 0x0a && ch !== 0x0d) ctrl++;
+      u16 += String.fromCharCode(ch);
+    }
+    if (ctrl / Math.max(1, bytes.length / 2) < 0.1) return u16;
+    return decodeGbk(new Uint8Array(bytes)).replace(/[\u0000-\u001f]/g, '');
+  }
+
   private parsePdfText(
     text: string,
     bills: NormalizedBill[],
@@ -131,13 +148,14 @@ export class CcbCreditParser extends BaseParser {
         for (let i = 0; i < body.length; i++) {
           const code = body.charCodeAt(i);
           if (code === 0 && i + 1 < body.length && body.charCodeAt(i + 1) >= 0x20 && body.charCodeAt(i + 1) < 0x7f) {
+            // \u0000+ASCII：UTF-16BE 的 ASCII，按两个字节保留
+            bytes.push(0, body.charCodeAt(i + 1));
             i++;
-            bytes.push(body.charCodeAt(i));
           } else {
             bytes.push(code & 0xff);
           }
         }
-        items.push({ x: curX, y: curY, text: decodeGbk(new Uint8Array(bytes)) });
+        items.push({ x: curX, y: curY, text: this.decodePdfText(bytes) });
       }
     }
 
@@ -228,6 +246,10 @@ export class CcbCreditParser extends BaseParser {
       const billType: 'income' | 'expense' = isRefund ? 'income' : 'expense';
       const card = (cells[3] || '').match(/[-\s]?(\d{4})$/);
       if (!cardHint && card) cardHint = card[1];
+      // 未映射列（入账日期/记账金额）放入 extraJson
+      const extraJson: Record<string, unknown> = {};
+      if ((cells[2] || '').trim()) extraJson['入账日期'] = (cells[2] || '').trim();
+      if ((cells[6] || '').trim()) extraJson['记账金额'] = (cells[6] || '').trim();
       bills.push({
         time: this.toDate(tDate),
         amountCents,
@@ -235,6 +257,7 @@ export class CcbCreditParser extends BaseParser {
         neutral: false,
         remark: desc || this.remarkPlaceholder,
         externalId: `${tDate}-${no}`,
+        extraJson: Object.keys(extraJson).length ? extraJson : undefined,
         rawData: { no, date: tDate },
       });
     }

@@ -46,6 +46,8 @@ export class CcbSavingParser extends BaseParser {
 
     const bills: NormalizedBill[] = [];
     const skipped: { row: number; reason: string }[] = [];
+    // 已被命名列覆盖的列名，其余列（币别/钞汇/账户余额/交易地点附言等）统一进 extraJson
+    const namedCols = new Set(['序号', '摘要', '交易日期', '交易金额', '对方账号与户名']);
 
     for (let r = headerIdx + 1; r < rows.length; r++) {
       const row = rows[r];
@@ -62,12 +64,14 @@ export class CcbSavingParser extends BaseParser {
       const amountCents = this.toCents(amountRaw); // 金额本身带符号
       const { billType, neutral } = this.resolveBillType(undefined, amountCents);
 
-      // 对方账号与户名: "6217001930066356917/赵杰" -> 户名在 / 后
+      // 对方账号与户名: "6217001930066356917/赵杰" -> 账号在 / 前，户名在 / 后
       const cpRaw = get(cCounterParty);
-      let counterParty: string | undefined;
+      let counterparty: string | undefined;
+      let counterpartyAccount: string | undefined;
       if (cpRaw && cpRaw !== '/') {
         const parts = cpRaw.split('/');
-        counterParty = (parts[parts.length - 1] || '').replace(/\*\*\*/g, '') || undefined;
+        counterparty = (parts[parts.length - 1] || '').replace(/\*\*\*/g, '') || undefined;
+        if (parts[0]) counterpartyAccount = (parts[0] || '').replace(/\*\*\*/g, '') || undefined;
       }
 
       bills.push({
@@ -77,7 +81,10 @@ export class CcbSavingParser extends BaseParser {
         neutral,
         sourceCategory: get(cSummary) || undefined,
         remark: get(cSummary) || undefined,
-        counterParty: counterParty || undefined,
+        counterParty: counterparty,
+        counterpartyAccount,
+        cardNo: accountHint,
+        extraJson: this.buildExtra(header, row, namedCols),
         externalId: `${get(cDate)}-${seq}`,
         rawData: row,
       });

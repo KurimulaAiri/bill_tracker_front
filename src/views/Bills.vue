@@ -41,6 +41,11 @@
       <el-table-column label="分类" width="100">
         <template #default="{ row }">{{ row.category?.name || '-' }}</template>
       </el-table-column>
+      <el-table-column label="对方" width="140">
+        <template #default="{ row }">
+          <span class="cp-cell" :title="row.counterParty || ''">{{ row.counterParty || '-' }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="账户" width="110">
         <template #default="{ row }">{{ row.account?.name || '-' }}</template>
       </el-table-column>
@@ -134,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { fetchBills, createBill, deleteBill, batchDeleteBills, deleteBillsByCondition } from '../api/bills';
 import { fetchAccounts } from '../api/accounts';
@@ -174,6 +179,12 @@ async function load(p = 1) {
   items.value = res.items;
   total.value = res.total;
 }
+
+// 筛选条件（日期/来源/分类）变更后自动搜索（防抖 300ms）
+watch([range, () => filters.source, () => filters.categoryId], () => {
+  clearTimeout((load as any)._t);
+  (load as any)._t = setTimeout(() => load(1), 300);
+});
 
 async function submitBill() {
   if (!form.yuan || form.yuan <= 0) { ElMessage.warning('请输入金额'); return; }

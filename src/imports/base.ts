@@ -42,6 +42,18 @@ export abstract class BaseParser implements Parser {
     return { billType: 'neutral', neutral: true };
   }
 
+  // 收集源表单中未被命名列覆盖的其他列（键=源列名，值=原始单元格），空集时返回 undefined
+  protected buildExtra(header: unknown[], cols: unknown[], named: Set<string>): Record<string, unknown> | undefined {
+    const out: Record<string, unknown> = {};
+    for (let i = 0; i < header.length; i++) {
+      const name = String(header[i] ?? '').trim();
+      if (!name || named.has(name)) continue;
+      const v = cols[i];
+      out[name] = v === undefined || v === null ? null : String(v);
+    }
+    return Object.keys(out).length ? out : undefined;
+  }
+
   // "20260803" -> ISO 日期
   protected toDate(yyyymmdd: string): string {
     const s = String(yyyymmdd).trim();
