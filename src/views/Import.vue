@@ -119,12 +119,24 @@
             <el-table :data="f.fails" size="small" max-height="220">
               <el-table-column label="行号" width="70" prop="rowNo" />
               <el-table-column label="失败原因" prop="reason" />
+              <el-table-column label="原始数据" min-width="220">
+                <template #default="{ row }">
+                  <span v-if="rawPreview(row)" class="raw-link" :title="rawPreview(row)" @click="openRaw(row)">{{ rawPreview(row) }}</span>
+                  <span v-else class="neutral-text">-</span>
+                </template>
+              </el-table-column>
             </el-table>
           </el-collapse-item>
           <el-collapse-item v-if="f.skips.length" :title="`跳过明细（${f.skips.length} 条）`">
             <el-table :data="f.skips" size="small" max-height="220">
               <el-table-column label="行号" width="70" prop="rowNo" />
               <el-table-column label="跳过原因" prop="reason" />
+              <el-table-column label="原始数据" min-width="220">
+                <template #default="{ row }">
+                  <span v-if="rawPreview(row)" class="raw-link" :title="rawPreview(row)" @click="openRaw(row)">{{ rawPreview(row) }}</span>
+                  <span v-else class="neutral-text">-</span>
+                </template>
+              </el-table-column>
             </el-table>
           </el-collapse-item>
         </el-collapse>
@@ -139,7 +151,7 @@
           <el-button type="warning" plain :loading="deduping" @click="onDedupe">清理重复账单</el-button>
         </div>
       </template>
-      <el-table :data="batchGroups" size="small" row-key="id">
+      <el-table :data="pagedBatchGroups" size="small" row-key="id">
         <el-table-column type="expand">
           <template #default="{ row }">
             <el-table :data="row.children" size="small" class="sub-table">
@@ -183,6 +195,16 @@
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
         </el-table-column>
       </el-table>
+      <div class="batch-pagination">
+        <el-pagination
+          v-model:current-page="batchPage"
+          v-model:page-size="batchPageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="batchGroups.length"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+        />
+      </div>
     </el-card>
 
     <!-- 批次详情 -->
@@ -207,7 +229,13 @@
             <el-table-column label="失败原因" min-width="160" prop="reason" />
             <el-table-column label="原始数据" min-width="220">
               <template #default="{ row }">
-                <span class="raw-cell" :title="JSON.stringify(row.raw)">{{ JSON.stringify(row.raw) }}</span>
+                <span class="raw-preview">{{ rawPreview(row) || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="JSON" width="90">
+              <template #default="{ row }">
+                <el-button v-if="rawPreview(row)" link type="primary" size="small" @click="openRaw(row)">查看JSON</el-button>
+                <span v-else class="neutral-text">-</span>
               </template>
             </el-table-column>
           </el-table>
@@ -219,16 +247,32 @@
           <el-table :data="detailSkips" size="small" max-height="260">
             <el-table-column label="行号" width="80" prop="rowNo" />
             <el-table-column label="跳过原因" min-width="200" prop="reason" />
+            <el-table-column label="原始数据" min-width="220">
+              <template #default="{ row }">
+                <span class="raw-preview">{{ rawPreview(row) || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="JSON" width="90">
+              <template #default="{ row }">
+                <el-button v-if="rawPreview(row)" link type="primary" size="small" @click="openRaw(row)">查看JSON</el-button>
+                <span v-else class="neutral-text">-</span>
+              </template>
+            </el-table-column>
           </el-table>
         </template>
         <el-empty v-if="!detailFails.length && !detailSkips.length" description="该批次无失败/跳过记录" :image-size="60" />
       </div>
     </el-dialog>
+
+    <!-- 原始数据查看 -->
+    <el-dialog v-model="rawDialogVisible" :title="rawDialog?.title || '原始数据'" width="640px">
+      <pre class="raw-json">{{ rawDialog?.text }}</pre>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { UploadFilled } from '@element-plus/icons-vue';
 import { confirmImport as submitConfirmImport, fetchBatches, dedupeBills, fetchBatchDetail } from '../api/imports';
@@ -249,6 +293,9 @@ const targetAccount = ref<string | null>(null);
 const accounts = ref<any[]>([]);
 const categories = ref<any[]>([]);
 const batches = ref<any[]>([]);
+// 批次历史分页
+const batchPage = ref(1);
+const batchPageSize = ref(10);
 
 const previewRows = computed(() => (parseData.value ? [...parseData.value.parse.bills] : []));
 
@@ -368,18 +415,18 @@ async function onConfirmImport() {
       if (!fileGroups.has(key)) fileGroups.set(key, []);
       fileGroups.get(key)!.push(b);
     }
-    // 解析阶段跳过的明细：按文件分组
-    const skipMap = new Map<string, { rowNo: number; reason: string }[]>();
+    // 解析阶段跳过的明细：按文件分组（解析器输出字段为 row，统一为后端 rowNo；raw 为导致跳过的原始字段值）
+    const skipMap = new Map<string, { rowNo: number; reason: string; raw?: unknown }[]>();
     for (const s of parseData.value.parse.skipped || []) {
       const key = s.fileKey || 'default';
       if (!skipMap.has(key)) skipMap.set(key, []);
-      skipMap.get(key)!.push({ rowNo: s.rowNo, reason: s.reason });
+      skipMap.get(key)!.push({ rowNo: s.row ?? s.rowNo ?? 0, reason: s.reason, raw: s.raw });
     }
     let totalOk = 0;
     let totalSkip = 0;
     let totalFail = 0;
     let errCount = 0;
-    const okFiles: { fileKey: string; fileName: string; batchId: string | number; success: number; skipped: number; failed: number; skips: any[] }[] = [];
+    const okFiles: { fileKey: string; fileName: string; batchId: string | number; success: number; skipped: number; failed: number }[] = [];
     for (const [fileKey, bills] of fileGroups) {
       const first = bills[0];
       const source = first.source || 'manual';
@@ -416,23 +463,25 @@ async function onConfirmImport() {
           success: res.success || 0,
           skipped: res.skipped || 0,
           failed: res.failed || 0,
-          skips: skipMap.get(fileKey) || [],
         });
       } catch (e: any) {
         errCount++;
         ElMessage.error(`${sourceLabel(source)}-${fileName} 导入失败: ${e?.message || '请求异常'}`);
       }
     }
-    // 并行拉取各文件失败明细（kind=fail），用于结果页罗列
+    // 并行拉取各文件批次详情：失败（kind=fail）与跳过（kind=skip）明细统一以入库数据为准，保证 tag 数量与明细行数一致
     const failsList = await Promise.all(okFiles.map((f) => fetchBatchDetail(String(f.batchId)).catch(() => null)));
-    const files = okFiles.map((f, i) => ({
-      fileName: f.fileName,
-      success: f.success,
-      skipped: f.skipped,
-      failed: f.failed,
-      skips: f.skips,
-      fails: (failsList[i]?.failures || []).map((x: any) => ({ rowNo: x.rowNo, reason: x.reason, isSkip: x.kind === 'skip' })),
-    }));
+    const files = okFiles.map((f, i) => {
+      const all = (failsList[i]?.failures || []).map((x: any) => ({ rowNo: x.rowNo, reason: x.reason, raw: x.raw, isSkip: x.kind === 'skip' }));
+      return {
+        fileName: f.fileName,
+        success: f.success,
+        skipped: f.skipped,
+        failed: f.failed,
+        skips: all.filter((x: any) => x.isSkip),
+        fails: all.filter((x: any) => !x.isSkip),
+      };
+    });
     if (errCount) ElMessage.warning(`导入完成：${okFiles.length}/${fileGroups.size} 个文件成功`);
     else ElMessage.success(`导入完成：成功 ${totalOk} 条`);
     result.value = { success: totalOk, skipped: totalSkip, failed: totalFail, files };
@@ -494,11 +543,48 @@ const batchGroups = computed(() => {
   return groups.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 });
 
+// 分页切片：对聚合后的批次组做前端分页
+const pagedBatchGroups = computed(() => {
+  const start = (batchPage.value - 1) * batchPageSize.value;
+  return batchGroups.value.slice(start, start + batchPageSize.value);
+});
+
+// 批次刷新后，若当前页超出最大页数则回退到最后一页
+watch(batchGroups, () => {
+  const maxPage = Math.max(1, Math.ceil(batchGroups.value.length / batchPageSize.value));
+  if (batchPage.value > maxPage) batchPage.value = maxPage;
+});
+// 切换每页条数时回到第一页
+watch(batchPageSize, () => {
+  batchPage.value = 1;
+});
+
 const detailVisible = ref(false);
 const detail = ref<any>(null);
 // 详情明细按类型分流：失败（kind=fail）与跳过（kind=skip）
 const detailFails = computed(() => ((detail.value?.failures || []) as any[]).filter((f) => f.kind !== 'skip'));
 const detailSkips = computed(() => ((detail.value?.failures || []) as any[]).filter((f) => f.kind === 'skip'));
+// 原始数据解包：后端以 { data: 原始值 } 包装存储
+function rawValue(row: any): any {
+  const r = row?.raw;
+  return r && typeof r === 'object' && 'data' in r ? r.data : r;
+}
+// 表格单元格预览：紧凑 JSON，超长省略
+function rawPreview(row: any): string {
+  const v = rawValue(row);
+  if (v === undefined || v === null || v === '') return '';
+  return typeof v === 'string' ? v : JSON.stringify(v);
+}
+const rawDialogVisible = ref(false);
+const rawDialog = ref<{ title: string; text: string } | null>(null);
+// 点击单元格：弹出格式化 JSON 查看完整原始数据
+function openRaw(row: any) {
+  const v = rawValue(row);
+  if (v === undefined || v === null || v === '') return;
+  const text = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+  rawDialog.value = { title: `原始数据（第 ${row.rowNo} 行）`, text };
+  rawDialogVisible.value = true;
+}
 async function viewDetail(row: any) {
   detail.value = await fetchBatchDetail(row.id);
   detailVisible.value = true;
@@ -554,7 +640,22 @@ onMounted(async () => {
 .result-file-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .result-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #303133; }
 .sub-table { margin: 0 24px; }
+.batch-pagination { margin-top: 12px; display: flex; justify-content: flex-end; }
 .failure-block { margin-top: 14px; }
 .failure-title { margin-bottom: 8px; }
-.raw-cell { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raw-link {
+  display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #409eff; cursor: pointer; vertical-align: middle;
+}
+.raw-link:hover { text-decoration: underline; }
+.raw-preview {
+  display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #606266; vertical-align: middle;
+}
+.raw-json {
+  margin: 0; max-height: 420px; overflow: auto;
+  background: #f5f7fa; border: 1px solid #e4e7ed; border-radius: 6px;
+  padding: 12px 14px; font-size: 12px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-all;
+}
 </style>

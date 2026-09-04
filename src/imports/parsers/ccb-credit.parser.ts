@@ -17,7 +17,7 @@ export class CcbCreditParser extends BaseParser {
   async parse(bytes: Uint8Array, fileName: string): Promise<ReducedParse> {
     const lower = fileName.toLowerCase();
     const bills: NormalizedBill[] = [];
-    const skipped: { row: number; reason: string }[] = [];
+    const skipped: { row: number; reason: string; raw?: unknown }[] = [];
     let cardNumber: string | undefined;
 
     if (lower.endsWith('.pdf')) {
@@ -41,7 +41,7 @@ export class CcbCreditParser extends BaseParser {
   private parseRows(
     rows: any[][],
     bills: NormalizedBill[],
-    skipped: { row: number; reason: string }[],
+    skipped: { row: number; reason: string; raw?: unknown }[],
     onCard?: (v: string) => void,
   ): void {
     let headerIdx = -1;
@@ -76,13 +76,13 @@ export class CcbCreditParser extends BaseParser {
       const get = (i: number) => (i >= 0 && row[i] !== undefined && row[i] !== null ? String(row[i]).trim() : '');
       const no = get(iNo);
       if (!/^\d+$/.test(no)) {
-        skipped.push({ row: r + 1, reason: `序号无效(${no})，跳过` });
+        skipped.push({ row: r + 1, reason: `序号无效(${no})，跳过`, raw: this.buildRaw(header, row) });
         continue;
       }
       const amtRaw = get(iAmt);
       const m = amtRaw.match(/([+-]?[\d,]+\.?\d*)/);
       if (!m) {
-        skipped.push({ row: r + 1, reason: `金额无效(${amtRaw})` });
+        skipped.push({ row: r + 1, reason: `金额无效(${amtRaw})`, raw: this.buildRaw(header, row) });
         continue;
       }
       const amountCents = this.toCents(m[1]);
@@ -123,7 +123,7 @@ export class CcbCreditParser extends BaseParser {
   private parsePdfText(
     text: string,
     bills: NormalizedBill[],
-    skipped: { row: number; reason: string }[],
+    skipped: { row: number; reason: string; raw?: unknown }[],
     onCard?: (v: string) => void,
   ): void {
     // 建行信用卡 PDF 为坐标定位文本：每条文本用 "1 0 0 1 x y Tm" 定位 + "(...)Tj" 输出。
@@ -140,20 +140,47 @@ export class CcbCreditParser extends BaseParser {
       }
       m = line.match(/^\((.+)\)\s*Tj$/);
       if (m) {
-        const body = m[1]
-          .replace(/\\\(/g, '(')
-          .replace(/\\\)/g, ')')
-          .replace(/\\\\/g, '\\');
+        // PDF 字符串字面量：中文 UTF-16BE 低字节为控制字符(0x0D 服/0x08 全角括等)时，
+        // 生成器写成 \r \b \t \n \f 等转义序列，必须按 PDF 规范还原为单字节，否则错位乱码
+        const body = m[1];
         const bytes: number[] = [];
         for (let i = 0; i < body.length; i++) {
-          const code = body.charCodeAt(i);
+          const code = body.charCodeAt(i) & 0xff;
           if (code === 0 && i + 1 < body.length && body.charCodeAt(i + 1) >= 0x20 && body.charCodeAt(i + 1) < 0x7f) {
             // \u0000+ASCII：UTF-16BE 的 ASCII，按两个字节保留
             bytes.push(0, body.charCodeAt(i + 1));
             i++;
-          } else {
-            bytes.push(code & 0xff);
+            continue;
           }
+          if (code === 0x5c) {
+            // 反斜杠转义：\n \r \t \b \f \( \) \\ 或八进制 \ddd（1~3 位，首位 0-7）
+            if (i + 1 >= body.length) {
+              bytes.push(0x5c);
+              break;
+            }
+            const c2 = body.charCodeAt(i + 1) & 0xff;
+            i++;
+            if (c2 >= 0x30 && c2 <= 0x37) {
+              let v = c2 - 0x30;
+              for (let k = 0; k < 2 && i + 1 < body.length; k++) {
+                const c3 = body.charCodeAt(i + 1) & 0xff;
+                if (c3 >= 0x30 && c3 <= 0x37) {
+                  v = v * 8 + (c3 - 0x30);
+                  i++;
+                } else break;
+              }
+              bytes.push(v & 0xff);
+            } else if ('nrtbf()\\'.includes(String.fromCharCode(c2))) {
+              // \n=换行 \r=回车 \t=制表 \b=退格 \f=换页 \( \)=括号 \\=反斜杠
+              const esc: Record<string, number> = { n: 0x0a, r: 0x0d, t: 0x09, b: 0x08, f: 0x0c, '(': 0x28, ')': 0x29, '\\': 0x5c };
+              bytes.push(esc[String.fromCharCode(c2)]);
+            } else {
+              // 未知转义：按 PDF 规范反斜杠被忽略，仅保留该字符
+              bytes.push(c2);
+            }
+            continue;
+          }
+          bytes.push(code);
         }
         items.push({ x: curX, y: curY, text: this.decodePdfText(bytes) });
       }
@@ -225,18 +252,18 @@ export class CcbCreditParser extends BaseParser {
       cells[4] = unassigned.join(' ');
       const no = (cells[0] || '').trim();
       if (!no) {
-        skipped.push({ row: Math.round(y), reason: `无序号，跳过` });
+        skipped.push({ row: Math.round(y), reason: `无序号，跳过`, raw: { 序号: no, 摘要: (cells[4] || '').trim() } });
         continue;
       }
       const tDate = (cells[1] || '').trim();
       if (!/^\d{8}$/.test(tDate)) {
-        skipped.push({ row: Math.round(y), reason: `交易日期无效(${tDate})` });
+        skipped.push({ row: Math.round(y), reason: `交易日期无效(${tDate})`, raw: { 序号: no, 交易日: tDate, 摘要: (cells[4] || '').trim() } });
         continue;
       }
       const amtRaw = (cells[5] || cells[6] || '').trim();
       const amtM = amtRaw.match(/([+-]?[\d,]+\.\d{2})/);
       if (!amtM) {
-        skipped.push({ row: Math.round(y), reason: `金额无效(${amtRaw})` });
+        skipped.push({ row: Math.round(y), reason: `金额无效(${amtRaw})`, raw: { 序号: no, 交易日: tDate, 金额: amtRaw, 摘要: (cells[4] || '').trim() } });
         continue;
       }
       const amountCents = this.toCents(amtM[1]);

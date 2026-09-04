@@ -2,7 +2,7 @@
 export interface NormalizedBill {
   id?: string; // 前端预览用
   time: Date | string; // 交易时间
-  amountCents: bigint; // 分，收入为正、支出为负
+  amountCents: bigint | string; // 分，收入为正、支出为负（解析阶段为 bigint，归一化后转字符串传输）
   billType: 'income' | 'expense' | 'neutral'; // 收支类型
   neutral: boolean; // 中性交易/不计收支
   sourceCategory?: string; // 来源原始分类
@@ -25,7 +25,7 @@ export interface ParseResult {
   fileName: string;
   total: number;
   bills: NormalizedBill[];
-  skipped: { row: number; reason: string }[];
+  skipped: { row: number; reason: string; raw?: unknown }[]; // raw: 导致跳过的原始字段值
   accountHint?: string; // 文件级账户提示（建行活期卡号等）
 }
 

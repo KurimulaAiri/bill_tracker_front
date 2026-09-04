@@ -45,7 +45,7 @@ export class CcbSavingParser extends BaseParser {
     }
 
     const bills: NormalizedBill[] = [];
-    const skipped: { row: number; reason: string }[] = [];
+    const skipped: { row: number; reason: string; raw?: unknown }[] = [];
     // 已被命名列覆盖的列名，其余列（币别/钞汇/账户余额/交易地点附言等）统一进 extraJson
     const namedCols = new Set(['序号', '摘要', '交易日期', '交易金额', '对方账号与户名']);
 
@@ -56,7 +56,7 @@ export class CcbSavingParser extends BaseParser {
 
       const seq = get(cSeq);
       if (!seq) {
-        skipped.push({ row: r + 1, reason: '序号为空，跳过行尾' });
+        skipped.push({ row: r + 1, reason: '序号为空，跳过行尾', raw: this.buildRaw(header, row) });
         continue;
       }
 

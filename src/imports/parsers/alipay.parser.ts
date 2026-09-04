@@ -42,7 +42,7 @@ export class AlipayParser extends BaseParser {
     const cMerchantNo = idx('商家订单号');
 
     const bills: NormalizedBill[] = [];
-    const skipped: { row: number; reason: string }[] = [];
+    const skipped: { row: number; reason: string; raw?: unknown }[] = [];
     // 已被命名列覆盖的列名，其余列统一进 extraJson
     const namedCols = new Set(['交易时间', '交易分类', '交易对方', '对方账号', '商品说明', '收/支', '金额', '收/付款方式', '交易状态', '交易订单号', '商家订单号']);
 
@@ -54,7 +54,7 @@ export class AlipayParser extends BaseParser {
 
       const status = get(cStatus);
       if (status === '交易关闭' || status === '') {
-        skipped.push({ row: r + 1, reason: status ? `交易状态:${status}，不计入账` : '空行跳过' });
+        skipped.push({ row: r + 1, reason: status ? `交易状态:${status}，不计入账` : '空行跳过', raw: this.buildRaw(header, cols) });
         continue;
       }
 

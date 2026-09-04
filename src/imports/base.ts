@@ -3,7 +3,7 @@ import type { NormalizedBill, Parser } from './types';
 export type { Parser };
 export interface ReducedParse {
   bills: NormalizedBill[];
-  skipped: { row: number; reason: string }[];
+  skipped: { row: number; reason: string; raw?: unknown }[];
   accountHint?: string;
 }
 
@@ -52,6 +52,18 @@ export abstract class BaseParser implements Parser {
       out[name] = v === undefined || v === null ? null : String(v);
     }
     return Object.keys(out).length ? out : undefined;
+  }
+
+  // 整行原始值：按表头映射该行的所有原始单元格，用于跳过/失败明细展示
+  protected buildRaw(header: unknown[], cols: unknown[]): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (let i = 0; i < header.length; i++) {
+      const name = String(header[i] ?? '').trim();
+      if (!name) continue;
+      const v = cols[i];
+      out[name] = v === undefined || v === null ? '' : String(v).trim();
+    }
+    return out;
   }
 
   // "20260803" -> ISO 日期

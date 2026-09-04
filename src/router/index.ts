@@ -13,6 +13,7 @@ const router = createRouter({
         { path: 'import', name: 'import', component: () => import('../views/Import.vue'), meta: { title: '导入账单' } },
         { path: 'bills', name: 'bills', component: () => import('../views/Bills.vue'), meta: { title: '账单明细' } },
         { path: 'stats', name: 'stats', component: () => import('../views/Stats.vue'), meta: { title: '统计分析' } },
+        { path: 'categories', name: 'categories', component: () => import('../views/Categories.vue'), meta: { title: '分类管理' } },
         { path: 'accounts', name: 'accounts', component: () => import('../views/Accounts.vue'), meta: { title: '账户管理' } },
       ],
     },

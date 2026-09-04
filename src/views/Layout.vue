@@ -7,6 +7,7 @@
         <el-menu-item index="/import"><el-icon><Upload /></el-icon><span>导入账单</span></el-menu-item>
         <el-menu-item index="/bills"><el-icon><List /></el-icon><span>账单明细</span></el-menu-item>
         <el-menu-item index="/stats"><el-icon><PieChart /></el-icon><span>统计分析</span></el-menu-item>
+        <el-menu-item index="/categories"><el-icon><Collection /></el-icon><span>分类管理</span></el-menu-item>
         <el-menu-item index="/accounts"><el-icon><Wallet /></el-icon><span>账户管理</span></el-menu-item>
       </el-menu>
     </el-aside>
@@ -31,7 +32,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { DataLine, Upload, List, PieChart, Wallet, Expand, Fold } from '@element-plus/icons-vue';
+import { DataLine, Upload, List, PieChart, Collection, Wallet, Expand, Fold } from '@element-plus/icons-vue';
 import { useUserStore } from '../stores/user';
 
 const router = useRouter();
