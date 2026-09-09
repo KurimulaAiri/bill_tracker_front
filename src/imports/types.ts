@@ -31,9 +31,9 @@ export interface ParseResult {
 
 export interface Parser {
   detect(fileName: string): boolean;
-  parse(bytes: Uint8Array, fileName: string): Promise<{
+  parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<{
     bills: NormalizedBill[];
-    skipped: { row: number; reason: string }[];
+    skipped: { row: number; reason: string; raw?: unknown }[];
     accountHint?: string;
   }>;
 }

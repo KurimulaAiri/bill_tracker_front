@@ -11,7 +11,7 @@
         accept=".csv,.xlsx,.xls,.pdf"
         :show-file-list="false"
       >
-        <el-icon class="upload-icon"><UploadFilled /></el-icon>
+        <el-icon class="upload-icon"><font-awesome-icon icon="cloud-arrow-up" size="2x" /></el-icon>
         <div class="el-upload__text">拖拽文件到此处，或 <em>点击选择文件</em></div>
         <template #tip>
           <div class="el-upload__tip">
@@ -24,6 +24,13 @@
         <el-button :loading="parsing" @click="dirInput?.click()">选择文件夹</el-button>
         <el-button type="primary" :loading="parsing" :disabled="!selectedFiles.length" @click="parseAll">开始解析</el-button>
       </div>
+      <el-progress
+        v-if="parsing && parseProgress.total"
+        :percentage="Math.round((parseProgress.current / parseProgress.total) * 100)"
+        :format="() => `解析中 ${parseProgress.current}/${parseProgress.total}`"
+        :stroke-width="14"
+        style="max-width: 380px; margin-top: 6px"
+      />
       <input ref="dirInput" type="file" webkitdirectory multiple accept=".csv,.xlsx,.xls,.pdf" class="hidden-input" @change="onDirPicked" />
       <div v-if="selectedFiles.length" class="file-info">
         <div class="file-list-title">已选择 {{ selectedFiles.length }} 个文件（点击标签 × 可移除）：</div>
@@ -64,6 +71,13 @@
           </div>
         </div>
       </template>
+      <el-progress
+        v-if="importing && importProgress.total"
+        :percentage="Math.round((importProgress.current / importProgress.total) * 100)"
+        :format="() => `导入中 ${importProgress.current}/${importProgress.total}`"
+        :stroke-width="14"
+        style="margin-bottom: 8px"
+      />
       <el-table :data="previewRows" max-height="460" size="small">
         <el-table-column label="时间" width="150">
           <template #default="{ row }">{{ formatTime(row.time) }}</template>
@@ -272,10 +286,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { UploadFilled } from '@element-plus/icons-vue';
 import { confirmImport as submitConfirmImport, fetchBatches, dedupeBills, fetchBatchDetail } from '../api/imports';
+import { fetchFieldMappings } from '../api/field-mappings';
 import { parseBillFile } from '../imports';
 import { findParser } from '../imports/registry';
 import { fetchAccounts } from '../api/accounts';
@@ -287,6 +301,8 @@ const skippedFiles = ref<{ name: string; reason: string }[]>([]);
 const dirInput = ref<HTMLInputElement | null>(null);
 const parsing = ref(false);
 const importing = ref(false);
+const parseProgress = reactive({ current: 0, total: 0 });
+const importProgress = reactive({ current: 0, total: 0 });
 const parseData = ref<any>(null);
 const result = ref<any>(null);
 const targetAccount = ref<string | null>(null);
@@ -297,7 +313,61 @@ const batches = ref<any[]>([]);
 const batchPage = ref(1);
 const batchPageSize = ref(10);
 
-const previewRows = computed(() => (parseData.value ? [...parseData.value.parse.bills] : []));
+// 预览自动分类：与后端 imports.service 的映射保持一致
+const ALIPAY_CATEGORY_MAP: Record<string, string> = {
+  餐饮美食: '餐饮美食', 交通出行: '交通出行', 日用百货: '日用百货', 文化休闲: '文化休闲',
+  充值缴费: '居住缴费', 投资理财: '投资理财', 资金互转: '资金互转', 退款: '退款收入',
+  医疗健康: '医疗健康', 其他: '其他支出',
+};
+const WECHAT_CATEGORY_MAP: Record<string, string> = {
+  商户消费: '其他支出', 亲属卡消费: '其他支出', 转账: '资金互转', 群收款: '其他收入',
+  二维码收款: '其他收入', 个人收款: '其他收入', 红包: '资金互转', 退款: '退款收入',
+  零钱提现: '资金互转', 零钱充值: '资金互转', 银行卡转入: '资金互转', 游戏充值: '文化休闲',
+  手机充值: '居住缴费', 信用卡还款: '其他支出', 理财通赎回: '投资理财', 理财通购买: '投资理财',
+};
+
+function mapCategory(source: string | undefined, sourceCategory: string | undefined, billType: string): string | undefined {
+  if (!sourceCategory || billType === 'neutral') return undefined;
+  const table = source === 'wechat' ? WECHAT_CATEGORY_MAP : ALIPAY_CATEGORY_MAP;
+  const mapped = table[sourceCategory];
+  if (mapped) return mapped === '退款收入' && billType === 'expense' ? '其他支出' : mapped;
+  return billType === 'income' ? '其他收入' : '其他支出';
+}
+
+// 映射分类 -> 系统分类 id；优先级：用户自定义映射（分类管理配置 aliases）> 内置映射表 > 其他兜底
+function resolvePreviewCategoryId(source: string | undefined, sourceCategory: string | undefined, billType: string): number | undefined {
+  // 1) 用户自定义映射命中（与后端 confirmImport 逻辑一致）
+  if (source && sourceCategory) {
+    const aliasCat = categories.value.find(
+      (c) =>
+        c.type === billType &&
+        Array.isArray(c.aliases) &&
+        c.aliases.some((a: any) => a.source === source && a.value === sourceCategory),
+    );
+    if (aliasCat) return Number(aliasCat.id);
+  }
+  // 2) 内置映射表
+  const mapped = mapCategory(source, sourceCategory, billType);
+  const pick = (name: string) => {
+    const c = categories.value.find((x) => x.type === billType && x.name === name);
+    return c ? Number(c.id) : undefined;
+  };
+  const hit = mapped ? pick(mapped) : undefined;
+  if (hit) return hit;
+  // 3) 兜底"其他收入/其他支出"
+  return pick(billType === 'income' ? '其他收入' : '其他支出');
+}
+
+const previewRows = computed(() => {
+  const rows = parseData.value ? [...parseData.value.parse.bills] : [];
+  for (const r of rows) {
+    // 用户未手动选择分类时，回填系统自动分类结果（已选择则不覆盖）
+    if (r.categoryId === undefined || r.categoryId === null || r.categoryId === '') {
+      r.categoryId = resolvePreviewCategoryId(r.source || parseData.value?.parse.source, r.sourceCategory, r.billType);
+    }
+  }
+  return rows;
+});
 
 // 同一文件判定：名称+大小+修改时间一致视为同一文件（File 对象每次选择都是新实例）
 function sameFile(a: File, b: File) {
@@ -359,16 +429,28 @@ function onDirPicked(e: Event) {
 async function parseAll() {
   if (!selectedFiles.value.length) return;
   parsing.value = true;
+  parseProgress.current = 0;
+  parseProgress.total = selectedFiles.value.length;
   try {
+    // 拉取用户配置的来源字段列名映射（未配置的来源取空对象，解析器用默认列名）
+    let fieldMappings: Record<string, Record<string, string>> = {};
+    try {
+      fieldMappings = (await fetchFieldMappings()) as any;
+    } catch {
+      fieldMappings = {};
+    }
     const mergedBills: any[] = [];
     const mergedSkipped: { row: number; reason: string; file?: string }[] = [];
     const sources = new Set<string>();
     const failNotes: { name: string; reason: string }[] = [];
     for (const f of selectedFiles.value) {
+      parseProgress.current++;
+      // 解析为同步 CPU 密集任务，先让出主线程刷新进度条
+      await nextTick();
       const fkey = `${f.name}-${f.size}-${f.lastModified}`;
       try {
-        // 浏览器本地解析，原始文件不上传服务器
-        const res: any = await parseBillFile(f);
+        // 浏览器本地解析，原始文件不上传服务器；按识别出的来源传入对应的字段映射配置
+        const res: any = await parseBillFile(f, fieldMappings[findParser(f.name)?.source || ''] || undefined);
         for (const b of res.parse.bills) mergedBills.push({ ...b, source: res.parse.source, fileKey: fkey, fileName: f.name });
         for (const s of res.parse.skipped) mergedSkipped.push({ ...s, file: f.name, fileKey: fkey });
         sources.add(res.parse.source);
@@ -427,7 +509,11 @@ async function onConfirmImport() {
     let totalFail = 0;
     let errCount = 0;
     const okFiles: { fileKey: string; fileName: string; batchId: string | number; success: number; skipped: number; failed: number }[] = [];
+    importProgress.total = fileGroups.size;
     for (const [fileKey, bills] of fileGroups) {
+      importProgress.current++;
+      // 等待 DOM 刷新，保证进度条逐文件推进
+      await nextTick();
       const first = bills[0];
       const source = first.source || 'manual';
       const fileName = first.fileName || fileKey;
@@ -503,14 +589,15 @@ async function loadBatches() {
   batches.value = (await fetchBatches()) as unknown as any[];
 }
 
-// 批次历史：同一次批量导入（groupId 相同）合并为一条，展开显示各文件（批次）
+// 批次历史：同一次批量导入（importGroupId 相同，存量数据回退 groupId）合并为一条，展开显示各文件（批次）
 const batchGroups = computed(() => {
   const groups: any[] = [];
   const map = new Map<string, any[]>();
   for (const b of batches.value) {
-    if (b.groupId) {
-      if (!map.has(b.groupId)) map.set(b.groupId, []);
-      map.get(b.groupId)!.push(b);
+    const gkey = b.importGroupId ?? b.groupId;
+    if (gkey) {
+      if (!map.has(gkey)) map.set(gkey, []);
+      map.get(gkey)!.push(b);
     } else {
       groups.push({
         id: `b${b.id}`,

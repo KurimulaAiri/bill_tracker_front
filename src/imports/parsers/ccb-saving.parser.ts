@@ -10,7 +10,7 @@ export class CcbSavingParser extends BaseParser {
     return /hqmx/i.test(fileName) || (/(银行|活期)/.test(fileName) && fileName.toLowerCase().endsWith('.xls'));
   }
 
-  async parse(bytes: Uint8Array, fileName: string): Promise<ReducedParse> {
+  async parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse> {
     const wb = XLSX.read(bytes, { type: 'array' });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
@@ -27,14 +27,14 @@ export class CcbSavingParser extends BaseParser {
     if (headerIdx === -1) throw new Error('无法识别建行活期明细表头（缺少"摘要,交易日期,交易金额"列）');
 
     const header = rows[headerIdx] || [];
-    const idx = (name: string) => header.findIndex((h) => String(h).trim() === name);
+    const rIdx = (fieldKey: string, defaultName: string) => this.resolveIdx(header, mapping, fieldKey, defaultName);
 
-    const cSummary = idx('摘要');
-    const cDate = idx('交易日期');
-    const cAmount = idx('交易金额');
-    const cCounterParty = idx('对方账号与户名');
-    const cBalance = idx('账户余额');
-    const cSeq = idx('序号');
+    const cSummary = rIdx('summary', '摘要');
+    const cDate = rIdx('date', '交易日期');
+    const cAmount = rIdx('amount', '交易金额');
+    const cCounterParty = rIdx('counterParty', '对方账号与户名');
+    const cBalance = rIdx('balance', '账户余额');
+    const cSeq = rIdx('seq', '序号');
 
     // 从头部找卡号/账号
     let accountHint: string | undefined;
@@ -86,7 +86,7 @@ export class CcbSavingParser extends BaseParser {
         cardNo: accountHint,
         extraJson: this.buildExtra(header, row, namedCols),
         externalId: `${get(cDate)}-${seq}`,
-        rawData: row,
+        rawData: this.buildRaw(header, row),
       });
     }
 

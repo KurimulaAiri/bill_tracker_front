@@ -10,7 +10,7 @@ export class WechatParser extends BaseParser {
     return /微信/.test(fileName) || /WeChat/i.test(fileName);
   }
 
-  async parse(bytes: Uint8Array, fileName: string): Promise<ReducedParse> {
+  async parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse> {
     const wb = XLSX.read(bytes, { type: 'array' });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
@@ -28,19 +28,19 @@ export class WechatParser extends BaseParser {
     if (headerIdx === -1) throw new Error('无法识别微信账单表头（缺少"交易时间,交易类型,收/支"列）');
 
     const header = rows[headerIdx] || [];
-    const idx = (name: string) => header.findIndex((h) => String(h).trim() === name);
+    const rIdx = (fieldKey: string, defaultName: string) => this.resolveIdx(header, mapping, fieldKey, defaultName);
 
-    const cTime = idx('交易时间');
-    const cType = idx('交易类型');
-    const cCounterParty = idx('交易对方');
-    const cProduct = idx('商品');
-    const cFlow = idx('收/支');
-    const cAmount = idx('金额(元)');
-    const cPayMethod = idx('支付方式');
-    const cStatus = idx('当前状态');
-    const cExternalId = idx('交易单号');
-    const cMerchantNo = idx('商户单号');
-    const cRemark = idx('备注');
+    const cTime = rIdx('time', '交易时间');
+    const cType = rIdx('type', '交易类型');
+    const cCounterParty = rIdx('counterParty', '交易对方');
+    const cProduct = rIdx('product', '商品');
+    const cFlow = rIdx('flow', '收/支');
+    const cAmount = rIdx('amount', '金额(元)');
+    const cPayMethod = rIdx('payMethod', '支付方式');
+    const cStatus = rIdx('status', '当前状态');
+    const cExternalId = rIdx('externalId', '交易单号');
+    const cMerchantNo = rIdx('merchantNo', '商户单号');
+    const cRemark = rIdx('remark', '备注');
 
     const bills: NormalizedBill[] = [];
     const skipped: { row: number; reason: string }[] = [];
@@ -72,21 +72,26 @@ export class WechatParser extends BaseParser {
       const remarkRaw = get(cRemark);
       const remark = remarkRaw && remarkRaw !== '/' ? remarkRaw : get(cProduct) || undefined;
 
+      // 交易类型既参与分类映射（sourceCategory），也并入附加列供详情展示
+      const type = get(cType) || undefined;
+      const extraJson = this.buildExtra(header, row, namedCols) || {};
+      if (type) extraJson['交易类型'] = type;
+
       bills.push({
         time,
         amountCents,
         billType,
         neutral,
-        sourceCategory: get(cType) || undefined,
+        sourceCategory: type,
         remark: remark || undefined,
         accountHint: get(cPayMethod) || undefined,
         counterParty: get(cCounterParty) || undefined,
         merchantNo: get(cMerchantNo) || undefined,
         payMethod: get(cPayMethod) || undefined,
         status: get(cStatus) || undefined,
-        extraJson: this.buildExtra(header, row, namedCols),
+        extraJson: Object.keys(extraJson).length ? extraJson : undefined,
         externalId: get(cExternalId) || undefined,
-        rawData: row,
+        rawData: this.buildRaw(header, row),
       });
     }
 

@@ -11,3 +11,7 @@ export function register(data: { username: string; password: string; email?: str
 export function fetchMe() {
   return request.get('/auth/me');
 }
+
+export function changePassword(data: { oldPassword: string; newPassword: string }) {
+  return request.post('/auth/change-password', data);
+}

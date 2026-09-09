@@ -8,14 +8,15 @@ export interface ParseBillResult {
   hints: { accountHint?: string; unknownCategories: string[] };
 }
 
-export async function parseBillFile(file: File): Promise<ParseBillResult> {
+// mapping: 该文件来源的字段列名映射 { fieldKey: columnName }，未配置的字段解析器回退默认列名
+export async function parseBillFile(file: File, mapping?: Record<string, string>): Promise<ParseBillResult> {
   const found = findParser(file.name);
   if (!found) {
     throw new Error(`暂不支持该文件格式: ${file.name}（支持支付宝csv/微信xlsx/建行活期xls/建行信用卡pdf）`);
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const { bills, skipped, accountHint } = await found.parser.parse(bytes, file.name);
+  const { bills, skipped, accountHint } = await found.parser.parse(bytes, file.name, mapping);
 
   // 归一化载荷（与后端 upload 返回的结构一致，供 confirm 直接使用）：
   // - amountCents: bigint -> string（JSON 传输）

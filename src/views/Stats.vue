@@ -66,8 +66,11 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useRouter } from 'vue-router';
 import * as echarts from 'echarts';
 import { fetchSummary, fetchTrend, fetchCategoryStats } from '../api/stats';
+
+const router = useRouter();
 
 const trendRef = ref<HTMLElement>();
 const catRef = ref<HTMLElement>();
@@ -159,6 +162,13 @@ function initCharts() {
   if (trendRef.value) trendChart = echarts.init(trendRef.value);
   if (catRef.value) catChart = echarts.init(catRef.value);
   if (incRef.value) incChart = echarts.init(incRef.value);
+  // 饼图点击分类 -> 跳转账单明细页并筛选该分类
+  const toBills = (params: any) => {
+    const categoryId = params?.data?.categoryId;
+    if (categoryId) router.push({ path: '/bills', query: { categoryId } });
+  };
+  catChart?.on('click', toBills);
+  incChart?.on('click', toBills);
 }
 
 function resize() {

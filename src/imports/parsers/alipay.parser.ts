@@ -10,7 +10,7 @@ export class AlipayParser extends BaseParser {
     return /支付宝|交易明细/i.test(fileName) || fileName.toLowerCase().endsWith('.csv');
   }
 
-  async parse(bytes: Uint8Array, fileName: string): Promise<ReducedParse> {
+  async parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse> {
     const text = decodeText(bytes);
     const lines = text.split(/\r?\n/);
 
@@ -27,19 +27,19 @@ export class AlipayParser extends BaseParser {
     }
 
     const header = lines[headerIdx].split(',');
-    const idx = (name: string) => header.findIndex((h) => h.trim() === name);
+    const rIdx = (fieldKey: string, defaultName: string) => this.resolveIdx(header, mapping, fieldKey, defaultName);
 
-    const cTime = idx('交易时间');
-    const cCategory = idx('交易分类');
-    const cCounterParty = idx('交易对方');
-    const cCounterpartyAccount = idx('对方账号');
-    const cProduct = idx('商品说明');
-    const cFlow = idx('收/支');
-    const cAmount = idx('金额');
-    const cPayMethod = idx('收/付款方式');
-    const cStatus = idx('交易状态');
-    const cExternalId = idx('交易订单号');
-    const cMerchantNo = idx('商家订单号');
+    const cTime = rIdx('time', '交易时间');
+    const cCategory = rIdx('category', '交易分类');
+    const cCounterParty = rIdx('counterParty', '交易对方');
+    const cCounterpartyAccount = rIdx('counterpartyAccount', '对方账号');
+    const cProduct = rIdx('product', '商品说明');
+    const cFlow = rIdx('flow', '收/支');
+    const cAmount = rIdx('amount', '金额');
+    const cPayMethod = rIdx('payMethod', '收/付款方式');
+    const cStatus = rIdx('status', '交易状态');
+    const cExternalId = rIdx('externalId', '交易订单号');
+    const cMerchantNo = rIdx('merchantNo', '商家订单号');
 
     const bills: NormalizedBill[] = [];
     const skipped: { row: number; reason: string; raw?: unknown }[] = [];
@@ -81,7 +81,7 @@ export class AlipayParser extends BaseParser {
         status: get(cStatus) || undefined,
         extraJson: this.buildExtra(header, cols, namedCols),
         externalId: get(cExternalId) || undefined,
-        rawData: cols,
+        rawData: this.buildRaw(header, cols),
       });
     }
 

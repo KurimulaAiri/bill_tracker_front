@@ -9,7 +9,13 @@ export interface ReducedParse {
 
 export abstract class BaseParser implements Parser {
   abstract detect(fileName: string): boolean;
-  abstract parse(bytes: Uint8Array, fileName: string): Promise<ReducedParse>;
+  abstract parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse>;
+
+  // 按字段映射取列索引：用户配置的列名（mapping[fieldKey]）优先，其次默认列名，均未命中返回 -1
+  protected resolveIdx(header: unknown[], mapping: Record<string, string> | undefined, fieldKey: string, defaultName: string): number {
+    const name = mapping?.[fieldKey] || defaultName;
+    return header.findIndex((h) => String(h).trim() === name);
+  }
 
   // 金额字符串 -> 分（bigint）。如 "12.82" -> 1282, "-1,000.00" -> -100000
   protected toCents(amountStr: string): bigint {

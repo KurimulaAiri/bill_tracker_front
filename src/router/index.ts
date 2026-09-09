@@ -14,6 +14,8 @@ const router = createRouter({
         { path: 'bills', name: 'bills', component: () => import('../views/Bills.vue'), meta: { title: '账单明细' } },
         { path: 'stats', name: 'stats', component: () => import('../views/Stats.vue'), meta: { title: '统计分析' } },
         { path: 'categories', name: 'categories', component: () => import('../views/Categories.vue'), meta: { title: '分类管理' } },
+        { path: 'field-mappings', name: 'field-mappings', component: () => import('../views/FieldMappings.vue'), meta: { title: '字段映射' } },
+        { path: 'profile', name: 'profile', component: () => import('../views/Profile.vue'), meta: { title: '个人中心' } },
         { path: 'accounts', name: 'accounts', component: () => import('../views/Accounts.vue'), meta: { title: '账户管理' } },
       ],
     },

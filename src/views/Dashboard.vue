@@ -84,8 +84,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { useRouter } from 'vue-router';
 import * as echarts from 'echarts';
 import { fetchSummary, fetchTrend, fetchCategoryStats } from '../api/stats';
+
+const router = useRouter();
 
 const summary = ref<any>({ income: '0', expense: '0', balance: '0', neutral: '0' });
 const hasBills = computed(() => Number(summary.value.income) + Number(summary.value.expense) !== 0 || Number(summary.value.neutral) !== 0);
@@ -146,7 +149,11 @@ async function load() {
   const cat: any = await fetchCategoryStats({ ...statParams(), type: 'expense' });
   catChart?.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c}元 ({d}%)' },
-    series: [{ type: 'pie', radius: ['35%', '65%'], data: cat.items.map((i: any) => ({ name: i.name, value: centsToYuan(i.amount) })) }],
+    series: [{
+      type: 'pie',
+      radius: ['35%', '65%'],
+      data: cat.items.map((i: any) => ({ name: i.name, value: centsToYuan(i.amount), categoryId: i.categoryId })),
+    }],
   });
 }
 
@@ -155,6 +162,11 @@ function resize() { trendChart?.resize(); catChart?.resize(); }
 onMounted(() => {
   if (trendRef.value) trendChart = echarts.init(trendRef.value);
   if (catRef.value) catChart = echarts.init(catRef.value);
+  // 饼图点击分类 -> 跳转账单明细页并筛选该分类
+  catChart?.on('click', (params: any) => {
+    const categoryId = params?.data?.categoryId;
+    if (categoryId) router.push({ path: '/bills', query: { categoryId } });
+  });
   load();
   window.addEventListener('resize', resize);
 });

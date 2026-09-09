@@ -14,22 +14,22 @@ export class CcbCreditParser extends BaseParser {
     return /xykmx/i.test(fileName) || (/credit|信用卡/i.test(fileName) && /\.pdf$/i.test(fileName));
   }
 
-  async parse(bytes: Uint8Array, fileName: string): Promise<ReducedParse> {
+  async parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse> {
     const lower = fileName.toLowerCase();
     const bills: NormalizedBill[] = [];
     const skipped: { row: number; reason: string; raw?: unknown }[] = [];
     let cardNumber: string | undefined;
 
     if (lower.endsWith('.pdf')) {
-      // PDF: 文本流提取（中文摘要无法还原时置空）
+      // PDF: 文本流提取（中文摘要无法还原时置空）；坐标定位无法按列名映射
       const text = extractPdfTexts(bytes).join('\n');
       this.parsePdfText(text, bills, skipped, (v) => (cardNumber = v));
     } else {
-      // Excel 兜底
+      // Excel 兜底：支持用户字段映射
       const wb = XLSX.read(bytes, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
-      this.parseRows(rows, bills, skipped, (v) => (cardNumber = v));
+      this.parseRows(rows, bills, skipped, mapping, (v) => (cardNumber = v));
     }
 
     // 文件级卡号（后四位）回填到每条记录
@@ -42,6 +42,7 @@ export class CcbCreditParser extends BaseParser {
     rows: any[][],
     bills: NormalizedBill[],
     skipped: { row: number; reason: string; raw?: unknown }[],
+    mapping?: Record<string, string>,
     onCard?: (v: string) => void,
   ): void {
     let headerIdx = -1;
@@ -55,20 +56,21 @@ export class CcbCreditParser extends BaseParser {
     if (headerIdx === -1) throw new Error('无法识别建行信用卡明细表头');
 
     const header = rows[headerIdx] || [];
-    const joined = String(header.join(' '));
 
-    // 分别处理：Excel 中文表头 或 PDF 英文表头结构性列
-    const cNo = joined.includes('No.') ? 0 : -1;
-    const cTDate = joined.match(/T-Date/) ? 1 : -1;
+    // 列名匹配（用户映射优先，其次默认列名）；中文/英文表头均可
     const cDateZh = header.findIndex((h) => String(h).includes('交易日期'));
     const cDescIdx = header.findIndex((h) => String(h).includes('Description') || String(h).includes('摘要'));
     const cTransIdx = header.findIndex((h) => String(h).includes('Trans') || String(h).includes('交易金额'));
 
     // 无明确列索引时按位置猜测: 0=序号 1=T-Date 4=Description 5=金额
-    const iNo = cNo >= 0 ? cNo : 0;
-    const iDate = cTDate >= 0 ? cTDate : cDateZh >= 0 ? cDateZh : 1;
-    const iDesc = cDescIdx >= 0 ? cDescIdx : 4;
-    const iAmt = cTransIdx >= 0 ? cTransIdx : 5;
+    const iNoRaw = this.resolveIdx(header, mapping, 'no', 'No.');
+    const iNo = iNoRaw >= 0 ? iNoRaw : 0;
+    const iDateRaw = this.resolveIdx(header, mapping, 'tDate', 'T-Date');
+    const iDate = iDateRaw >= 0 ? iDateRaw : cDateZh >= 0 ? cDateZh : 1;
+    const iDescRaw = this.resolveIdx(header, mapping, 'description', 'Description');
+    const iDesc = iDescRaw >= 0 ? iDescRaw : cDescIdx >= 0 ? cDescIdx : 4;
+    const iAmtRaw = this.resolveIdx(header, mapping, 'transAmount', 'Trans.Curr/Amt');
+    const iAmt = iAmtRaw >= 0 ? iAmtRaw : cTransIdx >= 0 ? cTransIdx : 5;
 
     for (let r = headerIdx + 1; r < rows.length; r++) {
       const row = rows[r];
@@ -277,16 +279,21 @@ export class CcbCreditParser extends BaseParser {
       const extraJson: Record<string, unknown> = {};
       if ((cells[2] || '').trim()) extraJson['入账日期'] = (cells[2] || '').trim();
       if ((cells[6] || '').trim()) extraJson['记账金额'] = (cells[6] || '').trim();
-      bills.push({
-        time: this.toDate(tDate),
-        amountCents,
-        billType,
-        neutral: false,
-        remark: desc || this.remarkPlaceholder,
-        externalId: `${tDate}-${no}`,
-        extraJson: Object.keys(extraJson).length ? extraJson : undefined,
-        rawData: { no, date: tDate },
-      });
+      // 原始信息以 key:value 形式保存全部可提取字段（序号/日期/摘要/金额/入账日期/卡号）
+        const rawData: Record<string, string> = { 序号: no, 交易日: tDate, 摘要: desc, 金额: amtRaw };
+        if ((cells[2] || '').trim()) rawData['入账日期'] = (cells[2] || '').trim();
+        if ((cells[3] || '').trim()) rawData['卡号'] = (cells[3] || '').trim();
+        if ((cells[6] || '').trim()) rawData['记账金额'] = (cells[6] || '').trim();
+        bills.push({
+          time: this.toDate(tDate),
+          amountCents,
+          billType,
+          neutral: false,
+          remark: desc || this.remarkPlaceholder,
+          externalId: `${tDate}-${no}`,
+          extraJson: Object.keys(extraJson).length ? extraJson : undefined,
+          rawData,
+        });
     }
     if (onCard && cardHint) onCard(cardHint);
   }
