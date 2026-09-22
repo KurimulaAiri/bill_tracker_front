@@ -6,12 +6,20 @@
       <div class="login-title">个人账单统计</div>
       <el-form :model="form" label-width="0" @keyup.enter="submit">
         <el-form-item>
-          <el-input v-model="form.username" placeholder="用户名" size="large" />
+          <el-input v-model="form.username" :placeholder="mode === 'register' ? '用户名（3-50 个字符）' : '用户名'" size="large" />
         </el-form-item>
         <el-form-item>
-          <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password />
+          <el-input v-model="form.password" type="password" :placeholder="mode === 'register' ? '密码（至少 6 位）' : '密码'" size="large" show-password />
         </el-form-item>
-        <el-button type="primary" size="large" class="full-btn" :loading="loading" @click="submit">登 录</el-button>
+        <el-form-item v-if="mode === 'register'">
+          <el-input v-model="form.confirm" type="password" placeholder="确认密码" size="large" show-password />
+        </el-form-item>
+        <el-button type="primary" size="large" class="full-btn" :loading="loading" @click="submit">
+          {{ mode === 'login' ? '登 录' : '注册并登录' }}
+        </el-button>
+        <div class="switch-mode" @click="toggleMode">
+          {{ mode === 'login' ? '没有账号？注册一个' : '已有账号？返回登录' }}
+        </div>
       </el-form>
     </el-card>
   </div>
@@ -21,29 +29,43 @@
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { login } from '../api/auth';
+import { login, register } from '../api/auth';
 import { useUserStore } from '../stores/user';
 
 const router = useRouter();
 const store = useUserStore();
 const loading = ref(false);
-const form = reactive({ username: '', password: '' });
+const mode = ref<'login' | 'register'>('login');
+const form = reactive({ username: '', password: '', confirm: '' });
 const canvasRef = ref<HTMLCanvasElement>();
 
 let rafId = 0;
 let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+
+function toggleMode() {
+  mode.value = mode.value === 'login' ? 'register' : 'login';
+  form.confirm = '';
+}
 
 async function submit() {
   if (!form.username || !form.password) {
     ElMessage.warning('请输入用户名和密码');
     return;
   }
+  if (mode.value === 'register') {
+    if (form.username.trim().length < 3) { ElMessage.warning('用户名至少 3 个字符'); return; }
+    if (form.password.length < 6) { ElMessage.warning('密码至少 6 位'); return; }
+    if (form.password !== form.confirm) { ElMessage.warning('两次输入的密码不一致'); return; }
+  }
   loading.value = true;
   try {
-    const res: any = await login({ username: form.username, password: form.password });
+    // 注册成功时后端直接返回 token（注册即登录），与登录返回结构同构
+    const res: any = mode.value === 'login'
+      ? await login({ username: form.username.trim(), password: form.password })
+      : await register({ username: form.username.trim(), password: form.password });
     store.setToken(res.accessToken);
     store.setUser(res.user);
-    ElMessage.success('登录成功');
+    ElMessage.success(mode.value === 'login' ? '登录成功' : '注册成功');
     router.push('/dashboard');
   } finally {
     loading.value = false;
@@ -192,5 +214,16 @@ onBeforeUnmount(() => {
 }
 .full-btn {
   width: 100%;
+}
+.switch-mode {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: #2d7d70;
+  cursor: pointer;
+  user-select: none;
+}
+.switch-mode:hover {
+  text-decoration: underline;
 }
 </style>

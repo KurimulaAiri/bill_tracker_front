@@ -35,7 +35,10 @@ request.interceptors.response.use(
   (response) => response.data,
   (error) => {
     const status = error?.response?.status;
-    if (status === 401) {
+    const url: string = error?.config?.url || '';
+    // 登录接口的 401 是业务错误（用户名或密码错误），必须提示；
+    // 其他接口的 401 才是 token 失效，静默清凭证回登录页
+    if (status === 401 && !url.includes('/auth/login')) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       if (window.location.pathname !== '/login') {
