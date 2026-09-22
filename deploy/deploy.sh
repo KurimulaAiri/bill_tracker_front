@@ -50,14 +50,34 @@ do_deploy() {
     fi
 
     log "发布产物到 ${DIST_DIR} ..."
-    # 先把上一版挪走，避免新旧文件混杂；发布成功后删除
-    rm -rf "${DIST_DIR}.bak"
-    if [ -d "${DIST_DIR}" ] && [ -n "$(ls -A "${DIST_DIR}" 2>/dev/null || true)" ]; then
-        mv "${DIST_DIR}" "${DIST_DIR}.bak"
+
+    # ---- 自愈：旧版本曾用「整目录搬移」，宝塔的站点保护文件可能遗留在 .bak 中 ----
+    # .user.ini 被 chattr +i 锁定（rm 报 Operation not permitted），.well-known 是证书验证目录，
+    # 两者都必须留在站点根目录，不能丢
+    if [ -d "${DIST_DIR}.bak" ]; then
+        log "检测到历史备份 ${DIST_DIR}.bak，恢复宝塔站点文件并清理 ..."
+        for keep in .user.ini .well-known; do
+            if [ ! -e "${DIST_DIR}/${keep}" ] && [ -e "${DIST_DIR}.bak/${keep}" ]; then
+                mv "${DIST_DIR}.bak/${keep}" "${DIST_DIR}/" 2>/dev/null || true
+                log "  已恢复 ${keep}"
+            fi
+        done
+        # 解锁后再删（需要 root，Jenkins 以 root 执行）
+        chattr -i "${DIST_DIR}.bak/.user.ini" 2>/dev/null || true
+        rm -rf "${DIST_DIR}.bak" 2>/dev/null || true
+        if [ -d "${DIST_DIR}.bak" ]; then
+            log "⚠️ ${DIST_DIR}.bak 未完全清除（.user.ini 仍被锁定），不影响发布"
+        else
+            log "  历史备份已清理 ✓"
+        fi
     fi
+
+    # ---- 就地同步：清理旧产物，但保留宝塔的站点保护文件 ----
     mkdir -p "${DIST_DIR}"
+    find "${DIST_DIR}" -mindepth 1 -maxdepth 1 \
+        ! -name '.user.ini' ! -name '.well-known' \
+        -exec rm -rf {} +
     cp -r dist/. "${DIST_DIR}/"
-    rm -rf "${DIST_DIR}.bak"
 
     log "发布完成，文件数: $(find "${DIST_DIR}" -type f | wc -l)"
 }
