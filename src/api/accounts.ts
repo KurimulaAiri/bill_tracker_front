@@ -4,7 +4,8 @@ export function fetchAccounts(params?: any) {
   return request.get('/accounts', { params });
 }
 
-export function createAccount(data: { name: string; type: string; balance?: number }) {
+// parentId: 创建子账户时指向父账户；不传则为顶层账户
+export function createAccount(data: { name: string; type: string; balance?: number; parentId?: string }) {
   return request.post('/accounts', data);
 }
 

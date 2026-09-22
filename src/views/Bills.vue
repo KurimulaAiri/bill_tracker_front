@@ -468,7 +468,8 @@ const total = ref(0);
 const page = ref(1);
 const pageSize = 20;
 const range = ref<[Date, Date] | null>(null);
-const filters = reactive<{ source?: string; categoryId?: string; billType?: string }>({});
+// keyword: 备注/对方/单号/类型/状态等模糊匹配，由后端 bills 查询支持
+const filters = reactive<{ source?: string; categoryId?: string; billType?: string; keyword?: string }>({});
 const sort = ref<{ prop: string; order: 'ascending' | 'descending' } | null>(null);
 const accounts = ref<any[]>([]);
 const categories = ref<any[]>([]);

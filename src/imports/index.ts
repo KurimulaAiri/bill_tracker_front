@@ -2,6 +2,7 @@
 // 原始账单文件不再上传服务器，解析为标准化账单 JSON 后由调用方 POST /imports/confirm 入库
 import * as XLSX from 'xlsx';
 import { findParser, findParserByContent } from './registry';
+import type { RegisteredParser } from './registry';
 import type { ParseResult } from './types';
 
 export interface ParseBillResult {
