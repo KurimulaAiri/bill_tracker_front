@@ -58,12 +58,17 @@ do_deploy() {
         log "检测到历史备份 ${DIST_DIR}.bak，恢复宝塔站点文件并清理 ..."
         for keep in .user.ini .well-known; do
             if [ ! -e "${DIST_DIR}/${keep}" ] && [ -e "${DIST_DIR}.bak/${keep}" ]; then
-                mv "${DIST_DIR}.bak/${keep}" "${DIST_DIR}/" 2>/dev/null || true
-                log "  已恢复 ${keep}"
+                # immutable 属性会同时阻止删除与 mv，必须先解锁
+                chattr -i "${DIST_DIR}.bak/${keep}" 2>/dev/null || true
+                if mv "${DIST_DIR}.bak/${keep}" "${DIST_DIR}/" 2>/dev/null; then
+                    log "  已恢复 ${keep}"
+                    # .user.ini 恢复后需要重新上 immutable 锁（宝塔的要求）
+                    [ "${keep}" = ".user.ini" ] && chattr +i "${DIST_DIR}/${keep}" 2>/dev/null || true
+                else
+                    log "  ⚠️ ${keep} 移动失败，跳过"
+                fi
             fi
         done
-        # 解锁后再删（需要 root，Jenkins 以 root 执行）
-        chattr -i "${DIST_DIR}.bak/.user.ini" 2>/dev/null || true
         rm -rf "${DIST_DIR}.bak" 2>/dev/null || true
         if [ -d "${DIST_DIR}.bak" ]; then
             log "⚠️ ${DIST_DIR}.bak 未完全清除（.user.ini 仍被锁定），不影响发布"
