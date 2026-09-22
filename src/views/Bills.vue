@@ -25,16 +25,17 @@
         <el-button type="primary" size="small" @click="load(1)">查询</el-button>
         <div class="spacer" />
         <el-button size="small" @click="batchDialogVisible = true">批处理</el-button>
+        <el-button size="small" @click="openExport">导出</el-button>
         <el-button size="small" type="success" @click="dialogVisible = true">手工记账</el-button>
       </div>
     </template>
 
-    <el-table :data="items" size="small" @selection-change="onSelectionChange">
+    <el-table v-if="!isMobile" :data="items" size="small" @selection-change="onSelectionChange" @sort-change="onSortChange">
       <el-table-column type="selection" width="44" />
-      <el-table-column label="时间" width="160">
+      <el-table-column label="时间" prop="billDate" width="175" sortable="custom">
         <template #default="{ row }">{{ formatTime(row.billDate) }}</template>
       </el-table-column>
-      <el-table-column label="金额" width="120">
+      <el-table-column label="金额" prop="amount" width="120" sortable="custom">
         <template #default="{ row }">
           <span v-if="row.billType === 'expense'" class="expense">-{{ centsToYuan(Math.abs(Number(row.amount))) }}</span>
           <span v-else-if="row.billType === 'income'" class="income">+{{ centsToYuan(Math.abs(Number(row.amount))) }}</span>
@@ -54,7 +55,7 @@
           {{ row.category?.name || '-' }}
         </template>
       </el-table-column>
-      <el-table-column label="对方" width="140" show-overflow-tooltip>
+      <el-table-column label="对方" prop="counterParty" width="140" show-overflow-tooltip sortable="custom">
         <template #default="{ row }">{{ row.counterParty || '-' }}</template>
       </el-table-column>
       <el-table-column label="账户" width="110" show-overflow-tooltip>
@@ -68,7 +69,7 @@
       <el-table-column label="批次" width="90">
         <template #default="{ row }">{{ row.importGroupId || '-' }}</template>
       </el-table-column>
-      <el-table-column label="备注" min-width="200" prop="note" show-overflow-tooltip />
+      <el-table-column label="备注" min-width="200" prop="note" show-overflow-tooltip sortable="custom" />
       <el-table-column label="操作" width="190">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="showDetail(row)">详情</el-button>
@@ -77,6 +78,44 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <!-- 移动端：卡片式账单列表 -->
+    <div v-else class="m-card-list">
+      <template v-if="items.length">
+        <div v-for="row in items" :key="row.id" class="m-card">
+          <div class="m-card-head">
+            <el-checkbox :model-value="isCardSelected(row.id)" @change="(v: any) => toggleCardSelected(row, v)" />
+            <span :class="row.billType === 'expense' ? 'expense' : row.billType === 'income' ? 'income' : 'neutral-text'" class="m-amount">
+              {{ row.billType === 'expense' ? '-' : row.billType === 'income' ? '+' : '' }}{{ centsToYuan(Math.abs(Number(row.amount))) }}
+            </span>
+            <el-tag v-if="row.billType === 'income'" type="success" size="small">收入</el-tag>
+            <el-tag v-else-if="row.billType === 'expense'" type="danger" size="small">支出</el-tag>
+            <span v-else class="neutral-text">不计收支</span>
+            <div class="m-card-actions">
+              <el-button link type="primary" size="small" @click="showDetail(row)">详情</el-button>
+              <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
+            </div>
+          </div>
+          <div class="m-card-fields">
+            <div class="m-field"><span class="m-label">时间</span><span class="m-value">{{ formatTime(row.billDate) }}</span></div>
+            <div class="m-field">
+              <span class="m-label">分类</span>
+              <span class="m-value">
+                <CategoryIcon v-if="row.category?.name" :icon="row.category?.icon" />
+                {{ row.category?.name || '-' }}
+              </span>
+            </div>
+            <div class="m-field"><span class="m-label">对方</span><span class="m-value">{{ row.counterParty || '-' }}</span></div>
+            <div class="m-field"><span class="m-label">账户</span><span class="m-value">{{ row.account?.name || '-' }}</span></div>
+            <div class="m-field"><span class="m-label">来源</span><span class="m-value">{{ sourceMap[row.source] || row.source }}</span></div>
+            <div class="m-field"><span class="m-label">批次</span><span class="m-value">{{ row.importGroupId || '-' }}</span></div>
+            <div class="m-field"><span class="m-label">备注</span><span class="m-value">{{ row.note || '-' }}</span></div>
+          </div>
+        </div>
+      </template>
+      <el-empty v-else description="暂无匹配的账单" />
+    </div>
 
     <el-pagination
       class="pager"
@@ -90,6 +129,11 @@
     <!-- 底部固定操作栏：批量操作（按钮居左横排，悬停显示说明） -->
     <BatchActionBar :selected-count="selectedRows.length">
       <template #actions>
+        <el-tooltip content="导出选中的账单（未勾选时按条件导出）" placement="top">
+          <el-button size="small" type="primary" plain @click="openExport">
+            <el-icon><font-awesome-icon icon="file-export" /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-tooltip content="批量删除选中的账单" placement="top" :disabled="!selectedRows.length">
           <el-button size="small" type="danger" plain :disabled="!selectedRows.length" @click="batchDelete">
             <el-icon><font-awesome-icon icon="trash-can" /></el-icon>
@@ -169,7 +213,9 @@
         </el-form-item>
         <el-form-item label="账户">
           <el-select v-model="form.accountId" placeholder="选择账户" size="small" clearable style="width: 100%">
-            <el-option v-for="a in accounts" :key="a.id" :label="a.name" :value="Number(a.id)" />
+            <el-option-group v-for="g in accountGroups" :key="g.label" :label="g.label">
+              <el-option v-for="a in g.children" :key="a.id" :label="a.label" :value="Number(a.id)" />
+            </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="备注">
@@ -250,7 +296,9 @@
         </el-form-item>
         <el-form-item v-if="batchForm.action === 'account'" label="目标账户">
           <el-select v-model="batchForm.accountId" placeholder="选择目标账户" clearable style="width: 100%">
-            <el-option v-for="a in accounts" :key="a.id" :label="a.name" :value="Number(a.id)" />
+            <el-option-group v-for="g in accountGroups" :key="g.label" :label="g.label">
+              <el-option v-for="a in g.children" :key="a.id" :label="a.label" :value="Number(a.id)" />
+            </el-option-group>
           </el-select>
         </el-form-item>
       </el-form>
@@ -299,6 +347,102 @@
         <el-button :type="preview?.action === 'delete' ? 'danger' : 'primary'" :loading="executing" @click="confirmExecute">执行</el-button>
       </template>
     </el-dialog>
+
+    <!-- 导出账单：可导出勾选的行，或按条件导出；支持预览确认 -->
+    <el-dialog v-model="exportDialogVisible" title="导出账单" width="520px" draggable>
+      <el-alert
+        :type="exportIdsMode?.length ? 'info' : 'info'"
+        :closable="false"
+        show-icon
+        :title="exportIdsMode?.length ? `将导出勾选的 ${exportIdsMode.length} 条账单（条件项已忽略）` : '按下方条件导出全部匹配账单；可先预览确认'" 
+        style="margin-bottom: 12px"
+      />
+      <el-form :model="exportForm" label-width="90px" :disabled="!!exportIdsMode?.length">
+        <el-form-item label="时间范围">
+          <el-date-picker
+            v-model="exportForm.range"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            clearable
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="收支类型">
+          <el-select v-model="exportForm.billType" placeholder="全部类型" clearable style="width: 100%">
+            <el-option label="收入" value="income" />
+            <el-option label="支出" value="expense" />
+            <el-option label="中性" value="neutral" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="来源">
+          <el-select v-model="exportForm.source" placeholder="全部来源" clearable style="width: 100%">
+            <el-option v-for="(label, key) in sourceMap" :key="key" :label="label" :value="key" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="分类">
+          <el-select v-model="exportForm.categoryId" placeholder="全部分类" clearable style="width: 100%">
+            <el-option v-for="c in categories" :key="c.id" :label="c.name" :value="String(c.id)" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="关键词">
+          <el-input v-model="exportForm.keyword" placeholder="备注/对方/单号/类型/状态等，留空导出全部" clearable />
+        </el-form-item>
+        <el-form-item label="导出格式">
+          <el-radio-group v-model="exportForm.format">
+            <el-radio value="xlsx">Excel (.xlsx)</el-radio>
+            <el-radio value="csv">CSV</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button :loading="exportPreviewing" @click="runExportPreview">预览</el-button>
+        <el-button type="primary" :loading="exporting" @click="doExport">导出</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 导出预览：展示匹配总数与抽样记录 -->
+    <el-dialog v-model="exportPreviewVisible" title="导出预览" width="720px" draggable>
+      <template v-if="exportPreview">
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom: 10px">
+          <template #title>
+            共匹配 <b>{{ exportPreview.total }}</b> 条<template v-if="exportPreview.total > exportPreview.limit">，仅展示前 {{ exportPreview.limit }} 条</template>；
+            导出格式：{{ exportForm.format === 'csv' ? 'CSV' : 'Excel (.xlsx)' }}
+          </template>
+        </el-alert>
+        <el-table :data="exportPreview.items" size="small" max-height="380">
+          <el-table-column label="时间" width="150">
+            <template #default="{ row }">{{ formatTime(row.billDate) }}</template>
+          </el-table-column>
+          <el-table-column label="金额" width="110">
+            <template #default="{ row }">
+              <span :class="row.billType === 'expense' ? 'expense' : row.billType === 'income' ? 'income' : 'neutral-text'">
+                {{ row.billType === 'expense' ? '-' : row.billType === 'income' ? '+' : '' }}{{ centsToYuan(Math.abs(Number(row.amount))) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="分类" width="110" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.category?.name || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="账户" width="110" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.account?.name || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="对方" width="130" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.counterParty || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="备注" min-width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.note || '-' }}</template>
+          </el-table-column>
+        </el-table>
+      </template>
+      <template #footer>
+        <el-button @click="exportPreviewVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="exporting" @click="doExport">导出</el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -306,14 +450,17 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { fetchBills, fetchBill, createBill, updateBill, deleteBill, batchDeleteBills, batchUpdateBills } from '../api/bills';
+import { fetchBills, fetchBill, createBill, updateBill, deleteBill, batchDeleteBills, batchUpdateBills, batchPreviewBills, exportBills, previewExportBills } from '../api/bills';
 import { fetchAccounts } from '../api/accounts';
 import { fetchCategories } from '../api/categories';
 import CategoryIcon from '../components/CategoryIcon.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
+import { useMobile } from '../composables/useMobile';
 import { centsToYuan, formatTime, yuanToCentsStr } from '../utils/format';
 
-const sourceMap: Record<string, string> = { manual: '手工', alipay: '支付宝', wechat: '微信', ccb_saving: '建行活期', ccb_credit: '建行信用卡' };
+const { isMobile } = useMobile();
+
+const sourceMap: Record<string, string> = { manual: '手工', alipay: '支付宝', wechat: '微信', ccb_saving: '建行活期', ccb_credit: '建行信用卡', export: '本地导出' };
 const route = useRoute();
 
 const items = ref<any[]>([]);
@@ -321,9 +468,23 @@ const total = ref(0);
 const page = ref(1);
 const pageSize = 20;
 const range = ref<[Date, Date] | null>(null);
-const filters = reactive<{ source?: string; categoryId?: string }>({});
+const filters = reactive<{ source?: string; categoryId?: string; billType?: string }>({});
+const sort = ref<{ prop: string; order: 'ascending' | 'descending' } | null>(null);
 const accounts = ref<any[]>([]);
 const categories = ref<any[]>([]);
+
+// 账户下拉按父账户分组展示：组内第一项为父账户本身，其后为其子账户；子账户名显示为 父/子 便于区分
+const accountGroups = computed(() =>
+  accounts.value
+    .filter((a: any) => !a.parentId)
+    .map((t: any) => ({
+      label: t.name,
+      children: [
+        { id: t.id, label: t.name },
+        ...(t.children || []).map((c: any) => ({ id: c.id, label: `${t.name} / ${c.name}` })),
+      ],
+    })),
+);
 const dialogVisible = ref(false);
 const form = reactive({ billType: 'expense', yuan: 0, categoryId: undefined, accountId: undefined, note: '' });
 const selectedRows = ref<any[]>([]);
@@ -347,6 +508,21 @@ const previewVisible = ref(false);
 const previewing = ref(false);
 const executing = ref(false);
 const preview = ref<any>(null);
+const exportDialogVisible = ref(false);
+const exporting = ref(false);
+const exportPreviewing = ref(false);
+const exportPreviewVisible = ref(false);
+const exportPreview = ref<any>(null);
+// 勾选行导出模式：非空表示仅导出这些 ids；为空表示按窗口条件导出
+const exportIdsMode = ref<string[] | null>(null);
+const exportForm = reactive<{
+  range: [string, string] | null;
+  billType?: string;
+  source?: string;
+  categoryId?: string;
+  keyword?: string;
+  format: 'xlsx' | 'csv';
+}>({ range: null, format: 'xlsx' });
 const actionLabel = computed(() => ({ category: '设置分类', account: '设置账户', delete: '删除记录' }[batchForm.action]));
 const detailVisible = ref(false);
 const detail = ref<any>(null);
@@ -374,6 +550,19 @@ function onSelectionChange(rows: any[]) {
   selectedRows.value = rows;
 }
 
+// 移动端卡片勾选：与 selectedRows 互相同步（桌面表格与卡片共用同一选中态）
+function isCardSelected(id: string | number) {
+  return selectedRows.value.some((r: any) => String(r.id) === String(id));
+}
+
+function toggleCardSelected(row: any, checked: boolean) {
+  if (checked) {
+    if (!isCardSelected(row.id)) selectedRows.value.push(row);
+  } else {
+    selectedRows.value = selectedRows.value.filter((r: any) => String(r.id) !== String(row.id));
+  }
+}
+
 async function load(p = 1) {
   page.value = p;
   const params: any = { page: p, pageSize };
@@ -385,9 +574,19 @@ async function load(p = 1) {
     params.start = range.value[0].toISOString();
     params.end = range.value[1].toISOString();
   }
+  if (sort.value) {
+    params.sortField = sort.value.prop;
+    params.sortOrder = sort.value.order === 'ascending' ? 'asc' : 'desc';
+  }
   const res: any = await fetchBills(params);
   items.value = res.items;
   total.value = res.total;
+}
+
+// 列排序（服务端排序）：升/降/取消，取消时回落为默认时间倒序
+function onSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
+  sort.value = order ? { prop, order } : null;
+  load(1);
 }
 
 // 筛选条件（日期/来源/分类/收支类型/关键词）变更后自动搜索（防抖 300ms）
@@ -472,7 +671,8 @@ async function runPreview() {
     };
     const res: any = await batchPreviewBills(params);
     const categoryName = categories.value.find((c: any) => String(c.id) === String(batchForm.categoryId))?.name || '';
-    const accountName = accounts.value.find((a: any) => String(a.id) === String(batchForm.accountId))?.name || '';
+    const accFlat = (accounts.value || []).flatMap((t: any) => [t, ...(t.children || [])]);
+    const accountName = accFlat.find((a: any) => String(a.id) === String(batchForm.accountId))?.name || '';
     preview.value = { ...res, action, categoryName, accountName, params };
     previewVisible.value = true;
   } finally {
@@ -505,11 +705,77 @@ async function confirmExecute() {
   }
 }
 
+// 打开导出窗口：有勾选行则导出勾选的行（条件项忽略），否则按条件导出
+function openExport() {
+  exportIdsMode.value = selectedRows.value.length ? selectedRows.value.map((r) => String(r.id)) : null;
+  exportPreview.value = null;
+  exportDialogVisible.value = true;
+}
+
+// 导出参数：ids 模式优先，否则按窗口条件
+function buildExportParams(): any {
+  const params: any = { format: exportForm.format };
+  if (exportIdsMode.value?.length) {
+    params.ids = exportIdsMode.value.join(',');
+    return params;
+  }
+  if (exportForm.source) params.source = exportForm.source;
+  if (exportForm.categoryId) params.categoryId = exportForm.categoryId;
+  if (exportForm.billType) params.billType = exportForm.billType;
+  if (exportForm.keyword && exportForm.keyword.trim()) params.keyword = exportForm.keyword.trim();
+  if (exportForm.range && exportForm.range[0] && exportForm.range[1]) {
+    params.start = `${exportForm.range[0]}T00:00:00+08:00`;
+    params.end = `${exportForm.range[1]}T23:59:59+08:00`;
+  }
+  return params;
+}
+
+// 导出预览：展示匹配总数与抽样记录
+async function runExportPreview() {
+  exportPreviewing.value = true;
+  try {
+    const res: any = await previewExportBills(buildExportParams());
+    exportPreview.value = res;
+    exportPreviewVisible.value = true;
+  } finally {
+    exportPreviewing.value = false;
+  }
+}
+
+// 导出账单：按 ids（勾选行）或窗口条件下载匹配记录
+async function doExport() {
+  exporting.value = true;
+  try {
+    const blob: Blob = (await exportBills(buildExportParams())) as unknown as Blob;
+    const suffix = exportForm.format === 'csv' ? 'csv' : 'xlsx';
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const name = `账单导出-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.${suffix}`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    ElMessage.success(`已导出 ${exportPreview.value ? exportPreview.value.total + ' 条' : ''}记录`);
+    exportDialogVisible.value = false;
+    exportPreviewVisible.value = false;
+  } catch {
+    // 错误提示已由 request 拦截器统一弹出
+  } finally {
+    exporting.value = false;
+  }
+}
+
 onMounted(async () => {
   accounts.value = (await fetchAccounts()) as unknown as any[];
   categories.value = (await fetchCategories()) as unknown as any[];
   // 从 URL 参数应用分类筛选（统计/首页饼图点击跳转）
   if (route.query.categoryId) filters.categoryId = String(route.query.categoryId);
+  // 从 URL 参数应用收支类型筛选（总览指标卡片跳转）
+  if (route.query.billType) filters.billType = String(route.query.billType);
   load(1);
 });
 
@@ -524,6 +790,18 @@ watch(
     }
   },
 );
+
+// 路由收支类型参数变化时同步筛选（如从总览指标卡片再次点击跳转）
+watch(
+  () => route.query.billType,
+  (v) => {
+    const next = v ? String(v) : undefined;
+    if (next !== filters.billType && page.value > 0) {
+      filters.billType = next;
+      load(1);
+    }
+  },
+);
 </script>
 
 <style scoped>
@@ -534,6 +812,15 @@ watch(
 .expense { color: #e6a23c; font-weight: 600; }
 .income { color: #67c23a; font-weight: 600; }
 .neutral-text { color: #a8abb2; font-size: 12px; }
+
+/* 移动端卡片列表 */
+.m-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.m-amount { font-weight: 600; font-size: 16px; }
+.m-card-actions { margin-left: auto; }
+.m-card-fields { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.m-card-fields .m-field { flex: 1 1 40%; }
+.m-card-fields .m-field:last-child { flex-basis: 100%; }
+
 .detail-json-title { margin: 14px 0 6px; font-size: 13px; color: #606266; }
 .raw-actions { margin-top: 14px; text-align: right; }
 .raw-actions .el-button { padding: 0; }

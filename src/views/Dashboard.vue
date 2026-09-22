@@ -22,25 +22,25 @@
 
     <el-row :gutter="16">
       <el-col :xs="12" :sm="6">
-        <el-card class="metric-card">
+        <el-card class="metric-card" @click="goBills('income')">
           <div class="metric-label">收入</div>
           <div class="metric-value income">¥{{ centsToYuan(summary.income) }}</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :sm="6">
-        <el-card class="metric-card">
+        <el-card class="metric-card" @click="goBills('expense')">
           <div class="metric-label">支出</div>
           <div class="metric-value expense">¥{{ centsToYuan(summary.expense) }}</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :sm="6">
-        <el-card class="metric-card">
+        <el-card class="metric-card" @click="goBills()">
           <div class="metric-label">结余</div>
           <div class="metric-value">{{ centsToYuan(summary.balance) }}</div>
         </el-card>
       </el-col>
       <el-col :xs="12" :sm="6">
-        <el-card class="metric-card">
+        <el-card class="metric-card" @click="goBills('neutral')">
           <div class="metric-label">中性交易</div>
           <div class="metric-value neutral">¥{{ centsToYuan(summary.neutral) }}</div>
         </el-card>
@@ -74,9 +74,41 @@
       </el-col>
     </el-row>
 
+    <el-card class="recent-card" v-if="hasBills">
+      <template #header>
+        <div class="chart-header">
+          <span>近期账单（{{ rangeText }}）</span>
+          <el-button link type="primary" @click="$router.push('/bills')">查看全部 →</el-button>
+        </div>
+      </template>
+      <el-table v-if="recent.length" :data="recent" size="small" class="recent-table" @row-click="$router.push('/bills')">
+        <el-table-column label="时间" prop="billDate" width="150">
+          <template #default="{ row }">{{ formatTime(row.billDate) }}</template>
+        </el-table-column>
+        <el-table-column label="金额" width="110">
+          <template #default="{ row }">
+            <span :class="row.billType === 'expense' ? 'expense' : row.billType === 'income' ? 'income' : 'neutral'">
+              {{ row.billType === 'expense' ? '-' : row.billType === 'income' ? '+' : '' }}{{ centsToYuan(Math.abs(Number(row.amount))) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="分类" width="110" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.category?.name || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="对方" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.counterParty || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="备注" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.note || '-' }}</template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="当前统计范围暂无账单" />
+    </el-card>
+
     <el-card class="guide-card" v-if="!hasBills">
       <el-empty description="暂无账单数据">
         <el-button type="primary" @click="$router.push('/import')">去导入账单文件</el-button>
+        <el-button @click="$router.push('/bills')">查看全部账单</el-button>
       </el-empty>
     </el-card>
   </div>
@@ -87,11 +119,15 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import * as echarts from 'echarts';
 import { fetchSummary, fetchTrend, fetchCategoryStats } from '../api/stats';
+import { fetchBills } from '../api/bills';
+import { formatTime } from '../utils/format';
 
 const router = useRouter();
 
 const summary = ref<any>({ income: '0', expense: '0', balance: '0', neutral: '0' });
 const hasBills = computed(() => Number(summary.value.income) + Number(summary.value.expense) !== 0 || Number(summary.value.neutral) !== 0);
+const recent = ref<any[]>([]);
+const trendMonths = ref<string[]>([]);
 const trendRef = ref<HTMLElement>();
 const catRef = ref<HTMLElement>();
 let trendChart: echarts.ECharts | null = null;
@@ -134,6 +170,7 @@ async function load() {
   summary.value = (await fetchSummary(statParams())) as any;
 
   const trend: any = await fetchTrend({ months: 12 });
+  trendMonths.value = trend.map((r: any) => r.month);
   trendChart?.setOption({
     tooltip: { trigger: 'axis' },
     legend: { data: ['收入', '支出'] },
@@ -155,13 +192,50 @@ async function load() {
       data: cat.items.map((i: any) => ({ name: i.name, value: centsToYuan(i.amount), categoryId: i.categoryId })),
     }],
   });
+
+  // 近期账单：跟随统计范围展示最近 5 条
+  const p: any = { page: 1, pageSize: 5 };
+  if (range.value && range.value[0] && range.value[1]) {
+    p.start = `${range.value[0]}T00:00:00+08:00`;
+    p.end = `${range.value[1]}T23:59:59+08:00`;
+  }
+  const res: any = await fetchBills(p);
+  recent.value = res.items || [];
 }
 
 function resize() { trendChart?.resize(); catChart?.resize(); }
 
+// 指标卡片点击 -> 跳转账单明细页并按收支类型筛选
+function goBills(billType?: string) {
+  router.push({ path: '/bills', query: billType ? { billType } : {} });
+}
+
 onMounted(() => {
   if (trendRef.value) trendChart = echarts.init(trendRef.value);
   if (catRef.value) catChart = echarts.init(catRef.value);
+
+  // 收支趋势：点击月份所在的纵列（整列纵向区域）-> 统计范围自动切到该月（月初~月末）并刷新
+  const onTrendClick = (e: any) => {
+    if (!trendChart || trendMonths.value.length === 0) return;
+    const point = [e.offsetX, e.offsetY];
+    // 命中范围：绘图区内的整列纵向区域 + 横向延伸到 x 轴标签区
+    const inArea =
+      trendChart.containPixel({ gridIndex: 0 }, point) ||
+      trendChart.containPixel({ xAxisIndex: 0 }, point);
+    if (!inArea) return;
+    // 像素坐标 -> x 轴类目索引，取整得到最近月份列
+    const xVal = trendChart.convertFromPixel({ gridIndex: 0 }, point)[0];
+    if (typeof xVal !== 'number' || !isFinite(xVal)) return;
+    const idx = Math.round(xVal);
+    if (idx < 0 || idx >= trendMonths.value.length) return;
+    const month = trendMonths.value[idx];
+    if (!/^\d{4}-\d{2}$/.test(month)) return;
+    const [y, m] = month.split('-').map(Number);
+    range.value = [toDateStr(new Date(y, m - 1, 1)), toDateStr(new Date(y, m, 0))];
+    load();
+  };
+  trendChart.getZr().on('click', onTrendClick);
+
   // 饼图点击分类 -> 跳转账单明细页并筛选该分类
   catChart?.on('click', (params: any) => {
     const categoryId = params?.data?.categoryId;
@@ -180,7 +254,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .dashboard { display: flex; flex-direction: column; gap: 16px; }
-.metric-card { border-radius: 12px; text-align: center; }
+.metric-card { border-radius: 12px; text-align: center; cursor: pointer; transition: transform .15s; }
+.metric-card:hover { transform: translateY(-2px); }
 .metric-label { color: #909399; font-size: 13px; }
 .metric-value { font-size: 22px; font-weight: 700; margin-top: 6px; font-family: 'Segoe UI', Roboto, sans-serif; }
 .income { color: #67c23a; }
@@ -190,6 +265,7 @@ onBeforeUnmount(() => {
 .chart-card { border-radius: 12px; }
 .chart { height: 300px; width: 100%; }
 .chart-header { display: flex; justify-content: space-between; align-items: center; }
+.recent-table { cursor: pointer; }
 .range-card { border-radius: 12px; }
 .range-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .range-label { color: #909399; font-size: 13px; }

@@ -10,6 +10,15 @@ export class AlipayParser extends BaseParser {
     return /支付宝|交易明细/i.test(fileName) || fileName.toLowerCase().endsWith('.csv');
   }
 
+  // 支付宝独有表头列："商品说明"（微信为"商品"）
+  identify(rows: unknown[][]): boolean {
+    for (let i = 0; i < Math.min(rows.length, 40); i++) {
+      const j = String((rows[i] || []).join(','));
+      if (j.includes('交易时间') && j.includes('商品说明') && j.includes('交易对方')) return true;
+    }
+    return false;
+  }
+
   async parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse> {
     const text = decodeText(bytes);
     const lines = text.split(/\r?\n/);
@@ -25,6 +34,11 @@ export class AlipayParser extends BaseParser {
     if (headerIdx === -1) {
       throw new Error('无法识别支付宝账单表头（缺少"交易时间,交易分类"列）');
     }
+
+    // 文件头元信息：表头前的信息行（查询时间范围/用户等）
+    const headerRows = this.collectHeaderLines(lines, headerIdx);
+    // 表尾合计行收集（"支出合计：xxx元"、"共N笔"等）
+    const summaryRows: string[] = [];
 
     const header = lines[headerIdx].split(',');
     const rIdx = (fieldKey: string, defaultName: string) => this.resolveIdx(header, mapping, fieldKey, defaultName);
@@ -49,6 +63,13 @@ export class AlipayParser extends BaseParser {
     for (let r = headerIdx + 1; r < lines.length; r++) {
       const line = lines[r].trim();
       if (!line) continue;
+
+      // 表尾合计/汇总行：不产生账单，仅保存进 meta
+      if (line.includes('合计') || /^共\s*\d+\s*笔/.test(line)) {
+        summaryRows.push(line);
+        continue;
+      }
+
       const cols = line.split(',');
       const get = (i: number) => (i >= 0 ? (cols[i] || '').trim() : '');
 
@@ -85,6 +106,9 @@ export class AlipayParser extends BaseParser {
       });
     }
 
-    return { bills, skipped, accountHint: undefined };
+    const meta: Record<string, unknown> = { headerRows };
+    if (summaryRows.length) meta.summaryRows = summaryRows;
+
+    return { bills, skipped, accountHint: undefined, meta };
   }
 }

@@ -1,0 +1,114 @@
+// ============================================================
+// bill_tracker_front 前端部署流水线
+//
+// 架构说明：
+//   Jenkins 运行在容器内，通过 SSH 操作宿主机完成构建与发布。
+//   宿主机 = 宝塔面板所在机器，node 使用宝塔自带运行时。
+//
+// 流程：
+//   1. Pull Code      容器内拉取 GitHub 代码
+//   2. Sync to Host   源码打包 scp 到宿主机 /opt/node-deploy/.work/bill_tracker_front
+//   3. Build & Deploy 宿主机用宝塔 node 构建，静态产物发布到 /opt/node-deploy/bill_tracker_front
+//   4. Verify         校验产物就绪
+// ============================================================
+pipeline {
+    agent any
+
+    environment {
+        GIT_REPO_URL     = "git@github.com:KurimulaAiri/bill_tracker_front.git"
+        GIT_BRANCH       = "master"
+
+        HOST_USER        = "root"
+        HOST_IP          = "172.21.0.1"
+        HOST_SSH_PORT    = "25184"
+
+        // 宿主机部署根目录（node 项目统一约定）
+        HOST_DEPLOY_ROOT = "/opt/node-deploy"
+        HOST_WORK_DIR    = "/opt/node-deploy/.work/bill_tracker_front"
+        NODE_BIN_DIR     = "/www/server/nodejs/v22.14.0/bin"
+
+        TAR_NAME         = "bill_tracker_front-src.tar.gz"
+    }
+
+    options {
+        skipDefaultCheckout true
+        timeout(time: 20, unit: "MINUTES")
+        timestamps()
+    }
+
+    parameters {
+        booleanParam(name: 'SKIP_BUILD', defaultValue: false, description: '跳过构建，仅重新校验已有产物')
+    }
+
+    stages {
+        stage("Pull Code") {
+            steps {
+                echo "===== 拉取代码 ${GIT_BRANCH} ====="
+                withCredentials([sshUserPrivateKey(credentialsId: "github-ssh-key", keyFileVariable: "GIT_SSH_KEY")]) {
+                    sh """
+                        export GIT_SSH_COMMAND="ssh -i \${GIT_SSH_KEY} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+                        git config --global --add safe.directory '*' || true
+                        git init || true
+                        git remote add origin \${GIT_REPO_URL} || git remote set-url origin \${GIT_REPO_URL}
+                        git fetch --all --prune
+                        git reset --hard origin/\${GIT_BRANCH}
+                        git clean -fdx -e node_modules || true
+                        echo "当前提交: \$(git rev-parse --short HEAD)"
+                    """
+                }
+            }
+        }
+
+        stage("Sync to Host") {
+            when { expression { params.SKIP_BUILD == false } }
+            steps {
+                echo "===== 同步源码到宿主机 ${HOST_WORK_DIR} ====="
+                withCredentials([sshUserPrivateKey(credentialsId: "host-ssh-key", keyFileVariable: "HOST_SSH_KEY")]) {
+                    sh """
+                        tar czf /tmp/\${TAR_NAME} --exclude='.git' --exclude='node_modules' --exclude='dist' --exclude='.idea' --exclude='.trae' .
+                        scp -i \${HOST_SSH_KEY} -P \${HOST_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/\${TAR_NAME} \${HOST_USER}@\${HOST_IP}:/tmp/
+                        ssh -i \${HOST_SSH_KEY} -p \${HOST_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \${HOST_USER}@\${HOST_IP} "mkdir -p \${HOST_WORK_DIR} \${HOST_DEPLOY_ROOT} && rm -rf \${HOST_WORK_DIR}/* && tar xzf /tmp/\${TAR_NAME} -C \${HOST_WORK_DIR}/ && rm -f /tmp/\${TAR_NAME} && echo 源码已同步"
+                    """
+                }
+            }
+        }
+
+        stage("Build & Deploy") {
+            steps {
+                echo "===== 宿主机构建并发布到 ${HOST_DEPLOY_ROOT}/bill_tracker_front ====="
+                withCredentials([sshUserPrivateKey(credentialsId: "host-ssh-key", keyFileVariable: "HOST_SSH_KEY")]) {
+                    sh """
+                        ssh -i \${HOST_SSH_KEY} -p \${HOST_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \${HOST_USER}@\${HOST_IP} "export PATH=\${NODE_BIN_DIR}:\$PATH; bash \${HOST_WORK_DIR}/deploy/deploy.sh deploy"
+                    """
+                }
+            }
+        }
+
+        stage("Verify") {
+            steps {
+                echo "===== 校验前端产物 ====="
+                withCredentials([sshUserPrivateKey(credentialsId: "host-ssh-key", keyFileVariable: "HOST_SSH_KEY")]) {
+                    sh """
+                        ssh -i \${HOST_SSH_KEY} -p \${HOST_SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \${HOST_USER}@\${HOST_IP} "export PATH=\${NODE_BIN_DIR}:\$PATH; bash \${HOST_WORK_DIR}/deploy/deploy.sh status"
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo ""
+            echo "=================================================="
+            echo "   bill_tracker_front 部署成功"
+            echo "   产物目录: ${HOST_DEPLOY_ROOT}/bill_tracker_front"
+            echo "=================================================="
+        }
+        failure {
+            echo ""
+            echo "=================================================="
+            echo "   bill_tracker_front 部署失败，请查看构建日志"
+            echo "=================================================="
+        }
+    }
+}

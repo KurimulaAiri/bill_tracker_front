@@ -57,4 +57,5 @@ export const SOURCE_LABELS: Record<string, string> = {
   wechat: '微信',
   ccb_saving: '建行活期',
   ccb_credit: '建行信用卡',
+  export: '本地导出',
 };

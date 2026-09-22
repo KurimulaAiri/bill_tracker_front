@@ -1,21 +1,20 @@
 <template>
-  <el-container class="layout" :style="{ '--aside-offset': (collapsed ? 64 : 200) + 16 + 'px' }">
-    <el-aside :width="collapsed ? '64px' : '200px'" class="aside">
+  <el-container class="layout" :style="{ '--aside-offset': asideOffset + 'px' }">
+    <!-- 桌面端：固定侧边栏 -->
+    <el-aside v-if="!isMobile" :width="collapsed ? '64px' : '200px'" class="aside">
       <div class="logo">{{ collapsed ? '账' : '个人账单' }}</div>
-      <el-menu :default-active="$route.path" router :collapse="collapsed" class="menu">
-        <el-menu-item index="/dashboard"><el-icon><font-awesome-icon icon="chart-line" /></el-icon><span>总览</span></el-menu-item>
-        <el-menu-item index="/import"><el-icon><font-awesome-icon icon="file-import" /></el-icon><span>导入账单</span></el-menu-item>
-        <el-menu-item index="/bills"><el-icon><font-awesome-icon icon="list" /></el-icon><span>账单明细</span></el-menu-item>
-        <el-menu-item index="/stats"><el-icon><font-awesome-icon icon="chart-pie" /></el-icon><span>统计分析</span></el-menu-item>
-        <el-menu-item index="/categories"><el-icon><font-awesome-icon icon="tags" /></el-icon><span>分类管理</span></el-menu-item>
-        <el-menu-item index="/field-mappings"><el-icon><font-awesome-icon icon="sliders" /></el-icon><span>字段映射</span></el-menu-item>
-        <el-menu-item index="/accounts"><el-icon><font-awesome-icon icon="wallet" /></el-icon><span>账户管理</span></el-menu-item>
-      </el-menu>
+      <MenuNav :collapsed="collapsed" @select="onNavSelect" />
     </el-aside>
     <el-container>
       <el-header class="header">
         <div class="header-left">
-          <el-icon class="collapse-btn" @click="collapsed = !collapsed"><font-awesome-icon v-if="collapsed" icon="angles-right" /><font-awesome-icon v-else icon="angles-left" /></el-icon>
+          <el-icon v-if="isMobile" class="hamburger" @click="drawerOpen = true">
+            <font-awesome-icon icon="bars" />
+          </el-icon>
+          <el-icon v-else class="collapse-btn" @click="collapsed = !collapsed">
+            <font-awesome-icon v-if="collapsed" icon="angles-right" />
+            <font-awesome-icon v-else icon="angles-left" />
+          </el-icon>
           <span class="page-title">{{ $route.meta.title || '' }}</span>
         </div>
         <div class="header-right">
@@ -27,17 +26,34 @@
         <router-view />
       </el-main>
     </el-container>
+
+    <!-- 移动端：汉堡按钮唤起的抽屉菜单 -->
+    <el-drawer v-model="drawerOpen" :with-header="false" size="240px" direction="ltr">
+      <div class="logo">个人账单</div>
+      <MenuNav :collapsed="false" @select="onNavSelect" />
+    </el-drawer>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useUserStore } from '../stores/user';
+import { useMobile } from '../composables/useMobile';
+import MenuNav from '../components/MenuNav.vue';
 
 const router = useRouter();
 const store = useUserStore();
 const collapsed = ref(false);
+const drawerOpen = ref(false);
+const { isMobile } = useMobile();
+
+// 底部操作栏（BatchActionBar）定位左边距：桌面=侧边栏宽度+16，移动端侧边栏隐藏=0
+const asideOffset = computed(() => (isMobile.value ? 16 : (collapsed.value ? 64 : 200) + 16));
+
+function onNavSelect() {
+  drawerOpen.value = false;
+}
 
 function logout() {
   store.logout();
@@ -52,7 +68,7 @@ function logout() {
 .menu { border-right: none; }
 .header { background: #fff; border-bottom: 1px solid #e8e8e8; display: flex; align-items: center; justify-content: space-between; }
 .header-left { display: flex; align-items: center; gap: 12px; }
-.collapse-btn { cursor: pointer; font-size: 18px; }
+.hamburger, .collapse-btn { cursor: pointer; font-size: 18px; }
 .page-title { font-size: 16px; font-weight: 600; }
 .header-right { display: flex; align-items: center; gap: 12px; }
 .username { color: #666; cursor: pointer; }

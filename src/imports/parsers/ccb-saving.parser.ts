@@ -10,6 +10,15 @@ export class CcbSavingParser extends BaseParser {
     return /hqmx/i.test(fileName) || (/(银行|活期)/.test(fileName) && fileName.toLowerCase().endsWith('.xls'));
   }
 
+  // 建行活期独有表头组合："摘要,交易日期,交易金额"
+  identify(rows: unknown[][]): boolean {
+    for (let i = 0; i < Math.min(rows.length, 30); i++) {
+      const j = String((rows[i] || []).join(','));
+      if (j.includes('摘要') && j.includes('交易日期') && j.includes('交易金额')) return true;
+    }
+    return false;
+  }
+
   async parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse> {
     const wb = XLSX.read(bytes, { type: 'array' });
     const ws = wb.Sheets[wb.SheetNames[0]];
@@ -25,6 +34,9 @@ export class CcbSavingParser extends BaseParser {
       }
     }
     if (headerIdx === -1) throw new Error('无法识别建行活期明细表头（缺少"摘要,交易日期,交易金额"列）');
+
+    // 文件头元信息：表头前的信息行（卡号/账号等）
+    const headerRows = this.collectHeaderRows(rows, headerIdx);
 
     const header = rows[headerIdx] || [];
     const rIdx = (fieldKey: string, defaultName: string) => this.resolveIdx(header, mapping, fieldKey, defaultName);
@@ -90,6 +102,8 @@ export class CcbSavingParser extends BaseParser {
       });
     }
 
-    return { bills, skipped, accountHint };
+    const meta: Record<string, unknown> = { headerRows };
+
+    return { bills, skipped, accountHint, meta };
   }
 }

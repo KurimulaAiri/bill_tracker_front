@@ -14,6 +14,15 @@ export class CcbCreditParser extends BaseParser {
     return /xykmx/i.test(fileName) || (/credit|信用卡/i.test(fileName) && /\.pdf$/i.test(fileName));
   }
 
+  // 建行信用卡表头特征："T-Date"+"Card Number"（英文），或"记账日期"+"卡号"（中文）
+  identify(rows: unknown[][]): boolean {
+    for (let i = 0; i < Math.min(rows.length, 20); i++) {
+      const j = String((rows[i] || []).join(','));
+      if ((j.includes('T-Date') && j.includes('Card Number')) || (j.includes('记账日期') && j.includes('卡号'))) return true;
+    }
+    return false;
+  }
+
   async parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse> {
     const lower = fileName.toLowerCase();
     const bills: NormalizedBill[] = [];

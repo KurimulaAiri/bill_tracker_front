@@ -31,6 +31,8 @@ export interface ParseResult {
 
 export interface Parser {
   detect(fileName: string): boolean;
+  /** 基于文件内容（表头特征列）识别来源，不依赖文件名；未实现时回退 detect */
+  identify?(rows: unknown[][]): boolean;
   parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<{
     bills: NormalizedBill[];
     skipped: { row: number; reason: string; raw?: unknown }[];

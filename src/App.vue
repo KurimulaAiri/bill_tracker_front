@@ -8,6 +8,8 @@
 </script>
 
 <style>
+@import './styles/mobile.css';
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #app { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; background: #f5f6f8; }
 

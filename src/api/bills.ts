@@ -37,3 +37,13 @@ export function batchUpdateBills(data: any) {
 export function batchPreviewBills(data: any) {
   return request.post('/bills/batch-preview', data);
 }
+
+// 导出账单：按条件/指定 ids 导出全部匹配记录（xlsx/csv），返回 blob
+export function exportBills(params: any) {
+  return request.get('/bills/export', { params, responseType: 'blob' });
+}
+
+// 导出预览：返回匹配总数与抽样记录
+export function previewExportBills(data: any) {
+  return request.post('/bills/export-preview', data);
+}

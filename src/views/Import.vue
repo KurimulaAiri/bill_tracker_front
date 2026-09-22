@@ -233,6 +233,14 @@
         <el-descriptions-item label="失败">{{ detail.batch.failed }}</el-descriptions-item>
       </el-descriptions>
 
+      <!-- 文件头元信息：昵称/时间范围/表尾汇总等 -->
+      <div v-if="detail?.batch?.meta" class="failure-block meta-block">
+        <div class="failure-title">
+          <el-tag size="small">文件头信息（meta）</el-tag>
+        </div>
+        <pre class="raw-json">{{ JSON.stringify(detail.batch.meta, null, 2) }}</pre>
+      </div>
+
       <div v-if="detail" class="failure-block">
         <template v-if="detailFails.length">
           <div class="failure-title">
@@ -328,6 +336,8 @@ const WECHAT_CATEGORY_MAP: Record<string, string> = {
 
 function mapCategory(source: string | undefined, sourceCategory: string | undefined, billType: string): string | undefined {
   if (!sourceCategory || billType === 'neutral') return undefined;
+  // 本地导出回导：分类列已是系统分类名，直配
+  if (source === 'export') return sourceCategory;
   const table = source === 'wechat' ? WECHAT_CATEGORY_MAP : ALIPAY_CATEGORY_MAP;
   const mapped = table[sourceCategory];
   if (mapped) return mapped === '退款收入' && billType === 'expense' ? '其他支出' : mapped;
@@ -441,6 +451,7 @@ async function parseAll() {
     }
     const mergedBills: any[] = [];
     const mergedSkipped: { row: number; reason: string; file?: string }[] = [];
+    const metaByFile: Record<string, any> = {};
     const sources = new Set<string>();
     const failNotes: { name: string; reason: string }[] = [];
     for (const f of selectedFiles.value) {
@@ -453,6 +464,8 @@ async function parseAll() {
         const res: any = await parseBillFile(f, fieldMappings[findParser(f.name)?.source || ''] || undefined);
         for (const b of res.parse.bills) mergedBills.push({ ...b, source: res.parse.source, fileKey: fkey, fileName: f.name });
         for (const s of res.parse.skipped) mergedSkipped.push({ ...s, file: f.name, fileKey: fkey });
+        // 文件头元信息（微信昵称/时间范围/表尾汇总等）随批次保存
+        if (res.parse.meta) metaByFile[fkey] = res.parse.meta;
         sources.add(res.parse.source);
       } catch (e: any) {
         failNotes.push({ name: f.name, reason: e?.message || '解析失败' });
@@ -477,6 +490,7 @@ async function parseAll() {
         skipped: mergedSkipped,
       },
       hints: { accountHint: undefined, unknownCategories: [] },
+      metaByFile,
     };
   } finally {
     parsing.value = false;
@@ -532,6 +546,7 @@ async function onConfirmImport() {
           groupId,
           skips: skipMap.get(fileKey) || [],
           accountId: targetAccount.value || undefined,
+          meta: parseData.value?.metaByFile?.[fileKey],
           bills: cleaned,
         });
         if (res.error) {
@@ -581,7 +596,7 @@ async function onConfirmImport() {
 }
 
 function sourceLabel(s: string) {
-  const map: Record<string, string> = { alipay: '支付宝', wechat: '微信', ccb_saving: '建行活期', ccb_credit: '建行信用卡', manual: '手工' };
+  const map: Record<string, string> = { alipay: '支付宝', wechat: '微信', ccb_saving: '建行活期', ccb_credit: '建行信用卡', manual: '手工', export: '本地导出' };
   return map[s] || s;
 }
 

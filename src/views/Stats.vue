@@ -76,6 +76,7 @@ const trendRef = ref<HTMLElement>();
 const catRef = ref<HTMLElement>();
 const incRef = ref<HTMLElement>();
 const months = ref(12);
+const trendMonths = ref<string[]>([]);
 
 let trendChart: echarts.ECharts | null = null;
 let catChart: echarts.ECharts | null = null;
@@ -118,6 +119,7 @@ async function loadSummary() {
 async function loadTrend() {
   const res: any = await fetchTrend({ months: months.value });
   if (!trendChart) return;
+  trendMonths.value = res.map((r: any) => r.month);
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
     legend: { data: ['收入', '支出'] },
@@ -138,13 +140,21 @@ async function loadCategories() {
   if (catChart) {
     catChart.setOption({
       tooltip: { trigger: 'item', formatter: '{b}: {c}元 ({d}%)' },
-      series: [{ type: 'pie', radius: ['35%', '65%'], data: cat.items.map((i: any) => ({ name: i.name, value: centsToYuan(i.amount) })) }],
+      series: [{
+        type: 'pie',
+        radius: ['35%', '65%'],
+        data: cat.items.map((i: any) => ({ name: i.name, value: centsToYuan(i.amount), categoryId: i.categoryId })),
+      }],
     });
   }
   if (incChart) {
     incChart.setOption({
       tooltip: { trigger: 'item', formatter: '{b}: {c}元 ({d}%)' },
-      series: [{ type: 'pie', radius: ['35%', '65%'], data: inc.items.map((i: any) => ({ name: i.name, value: centsToYuan(i.amount) })) }],
+      series: [{
+        type: 'pie',
+        radius: ['35%', '65%'],
+        data: inc.items.map((i: any) => ({ name: i.name, value: centsToYuan(i.amount), categoryId: i.categoryId })),
+      }],
     });
   }
 }
@@ -162,6 +172,29 @@ function initCharts() {
   if (trendRef.value) trendChart = echarts.init(trendRef.value);
   if (catRef.value) catChart = echarts.init(catRef.value);
   if (incRef.value) incChart = echarts.init(incRef.value);
+
+  // 收支趋势：点击月份所在的纵列（整列纵向区域）-> 统计范围自动切到该月（月初~月末）并刷新
+  const onTrendClick = (e: any) => {
+    if (!trendChart || trendMonths.value.length === 0) return;
+    const point = [e.offsetX, e.offsetY];
+    // 命中范围：绘图区内的整列纵向区域 + 横向延伸到 x 轴标签区
+    const inArea =
+      trendChart.containPixel({ gridIndex: 0 }, point) ||
+      trendChart.containPixel({ xAxisIndex: 0 }, point);
+    if (!inArea) return;
+    // 像素坐标 -> x 轴类目索引，取整得到最近月份列
+    const xVal = trendChart.convertFromPixel({ gridIndex: 0 }, point)[0];
+    if (typeof xVal !== 'number' || !isFinite(xVal)) return;
+    const idx = Math.round(xVal);
+    if (idx < 0 || idx >= trendMonths.value.length) return;
+    const month = trendMonths.value[idx];
+    if (!/^\d{4}-\d{2}$/.test(month)) return;
+    const [y, m] = month.split('-').map(Number);
+    range.value = [toDateStr(new Date(y, m - 1, 1)), toDateStr(new Date(y, m, 0))];
+    loadAll();
+  };
+  trendChart.getZr().on('click', onTrendClick);
+
   // 饼图点击分类 -> 跳转账单明细页并筛选该分类
   const toBills = (params: any) => {
     const categoryId = params?.data?.categoryId;

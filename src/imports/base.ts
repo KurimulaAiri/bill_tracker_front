@@ -5,11 +5,51 @@ export interface ReducedParse {
   bills: NormalizedBill[];
   skipped: { row: number; reason: string; raw?: unknown }[];
   accountHint?: string;
+  /** 文件级元信息：表头前携带的信息与表尾汇总（微信昵称/时间范围/笔数汇总等） */
+  meta?: Record<string, unknown>;
 }
 
 export abstract class BaseParser implements Parser {
   abstract detect(fileName: string): boolean;
   abstract parse(bytes: Uint8Array, fileName: string, mapping?: Record<string, string>): Promise<ReducedParse>;
+
+  // 收集表头之前的非空行（原始头部信息），供 meta 保存
+  protected collectHeaderRows(rows: readonly unknown[][], headerIdx: number): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < headerIdx; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const line = row
+        .map((v) => (v === undefined || v === null ? '' : String(v).trim()))
+        .filter(Boolean)
+        .join(' ');
+      if (line) out.push(line);
+    }
+    return out;
+  }
+
+  protected collectHeaderLines(lines: readonly string[], headerIdx: number): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < headerIdx; i++) {
+      const line = String(lines[i] || '').trim();
+      if (line) out.push(line);
+    }
+    return out;
+  }
+
+  // 解析 "键：[值]" 形式的头部行（微信："微信昵称：[KurimulaAiri]"；支持一行多个键值，如 "起始时间：[..] 终止时间：[..]"）
+  protected parseBracketFields(lines: readonly string[]): Record<string, string> {
+    const fields: Record<string, string> = {};
+    for (const line of lines) {
+      const re = /([^：:]+)[：:]\s*[\[（(]\s*([^\]]*?)\s*[\]）)]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(line))) {
+        const k = m[1].trim();
+        if (k) fields[k] = m[2].trim();
+      }
+    }
+    return fields;
+  }
 
   // 按字段映射取列索引：用户配置的列名（mapping[fieldKey]）优先，其次默认列名，均未命中返回 -1
   protected resolveIdx(header: unknown[], mapping: Record<string, string> | undefined, fieldKey: string, defaultName: string): number {
