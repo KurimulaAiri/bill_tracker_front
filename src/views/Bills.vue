@@ -63,7 +63,7 @@
       </el-table-column>
       <el-table-column label="来源" width="90">
         <template #default="{ row }">
-          <el-tag size="small" type="info">{{ sourceMap[row.source] || row.source }}</el-tag>
+          <el-tag size="small" class="source-tag" :style="sourceTagStyle(row.source)">{{ sourceMap[row.source] || row.source }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="批次" width="90">
@@ -108,7 +108,7 @@
             </div>
             <div class="m-field"><span class="m-label">对方</span><span class="m-value">{{ row.counterParty || '-' }}</span></div>
             <div class="m-field"><span class="m-label">账户</span><span class="m-value">{{ row.account?.name || '-' }}</span></div>
-            <div class="m-field"><span class="m-label">来源</span><span class="m-value">{{ sourceMap[row.source] || row.source }}</span></div>
+            <div class="m-field"><span class="m-label">来源</span><span class="m-value"><el-tag size="small" class="source-tag" :style="sourceTagStyle(row.source)">{{ sourceMap[row.source] || row.source }}</el-tag></span></div>
             <div class="m-field"><span class="m-label">批次</span><span class="m-value">{{ row.importGroupId || '-' }}</span></div>
             <div class="m-field"><span class="m-label">备注</span><span class="m-value">{{ row.note || '-' }}</span></div>
           </div>
@@ -159,7 +159,9 @@
           </el-descriptions-item>
           <el-descriptions-item label="分类">{{ detail.category?.name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="账户">{{ detail.account?.name || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="来源">{{ sourceMap[detail.source] || detail.source }}</el-descriptions-item>
+          <el-descriptions-item label="来源">
+            <el-tag size="small" class="source-tag" :style="sourceTagStyle(detail.source)">{{ sourceMap[detail.source] || detail.source }}</el-tag>
+          </el-descriptions-item>
           <el-descriptions-item label="来源批次">{{ detail.importGroupId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="批次文件">{{ detail.batchFileName || '-' }}<template v-if="detail.importBatchId">（批次 #{{ detail.importBatchId }}）</template></el-descriptions-item>
           <el-descriptions-item label="交易类型">{{ detail.extraJson?.['交易类型'] || '-' }}</el-descriptions-item>
@@ -461,6 +463,23 @@ import { centsToYuan, formatTime, yuanToCentsStr } from '../utils/format';
 const { isMobile } = useMobile();
 
 const sourceMap: Record<string, string> = { manual: '手工', alipay: '支付宝', wechat: '微信', ccb_saving: '建行活期', ccb_credit: '建行信用卡', export: '本地导出' };
+
+// 各来源主题色：浅底 + 同色文字/描边，观感与 Element 的浅色 tag 一致。
+// 支付宝/微信取各自品牌色；建行取品牌蓝，信用卡用深一档以便和活期区分；手工与本地导出用中性色系。
+const SOURCE_TAG_COLOR: Record<string, { color: string; bg: string; border: string }> = {
+  alipay: { color: '#1677FF', bg: '#E8F1FF', border: '#B9D4FF' },
+  wechat: { color: '#07C160', bg: '#E6F8EF', border: '#B0E6C9' },
+  ccb_saving: { color: '#0066B3', bg: '#E5F0F9', border: '#AFCFE6' },
+  ccb_credit: { color: '#0A3D62', bg: '#E7EEF4', border: '#B6C9D8' },
+  manual: { color: '#606266', bg: '#F2F3F5', border: '#DCDFE6' },
+  export: { color: '#7C3AED', bg: '#F3EDFF', border: '#D8C7FF' },
+  __default: { color: '#909399', bg: '#F4F4F5', border: '#E9E9EB' },
+};
+
+function sourceTagStyle(source?: string) {
+  const c = SOURCE_TAG_COLOR[source || ''] || SOURCE_TAG_COLOR.__default;
+  return { color: c.color, backgroundColor: c.bg, borderColor: c.border };
+}
 const route = useRoute();
 
 const items = ref<any[]>([]);
