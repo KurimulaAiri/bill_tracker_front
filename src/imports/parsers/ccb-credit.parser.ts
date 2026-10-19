@@ -157,7 +157,8 @@ export class CcbCreditParser extends BaseParser {
     cidMap?: Map<number, string> | null,
   ): void {
     // 建行信用卡 PDF 为坐标定位文本：每条文本用 "1 0 0 1 x y Tm" 定位 + "(...)Tj" 输出。
-    // ASCII 字符以 UTF-16BE(\u0000X) 混排，中文为 GBK 字节。策略：解析坐标后按 y 聚行、按 x 分列重建表格。
+    // 文本字节按页面字体编码解释（UniGB-UCS2-H / Identity-H+ToUnicode / GBK，见 decodePdfText），
+    // 策略：解析坐标后按 y 聚行、按 x 分列重建表格。
     const items: { x: number; y: number; text: string }[] = [];
     let curX = 0;
     let curY = 0;
@@ -176,12 +177,11 @@ export class CcbCreditParser extends BaseParser {
         const bytes: number[] = [];
         for (let i = 0; i < body.length; i++) {
           const code = body.charCodeAt(i) & 0xff;
-          if (code === 0 && i + 1 < body.length && body.charCodeAt(i + 1) >= 0x20 && body.charCodeAt(i + 1) < 0x7f) {
-            // \u0000+ASCII：UTF-16BE 的 ASCII，按两个字节保留
-            bytes.push(0, body.charCodeAt(i + 1));
-            i++;
-            continue;
-          }
+          // 不要为「NUL + ASCII」加捷径：NUL 只是形如 UTF-16BE/CID 的高字节，
+          // 紧跟的那个字符仍必须按 PDF 规范解析（它可能正是 \) 或 \\ 的转义首字符）。
+          // 反例：\u0000\) 正确应还原为 00 29（CID 0x0029）；若走捷径会吞掉反斜杠变成
+          // 00 5c 29 三个字节，其后 CID 全部错位，最终解出孤立代理项，写库时报
+          // JSON "unexpected end of hex escape"。
           if (code === 0x5c) {
             // 反斜杠转义：\n \r \t \b \f \( \) \\ 或八进制 \ddd（1~3 位，首位 0-7）
             if (i + 1 >= body.length) {
