@@ -8,6 +8,11 @@
           <el-option label="支出" value="expense" />
           <el-option label="中性" value="neutral" />
         </el-select>
+        <div class="amount-range">
+          <el-input-number v-model="filters.minAmount" :min="0" :controls="false" :precision="2" placeholder="金额起" size="small" style="width: 92px" />
+          <span class="amount-sep">~</span>
+          <el-input-number v-model="filters.maxAmount" :min="0" :controls="false" :precision="2" placeholder="金额止" size="small" style="width: 92px" />
+        </div>
         <el-select v-model="filters.source" placeholder="来源" clearable size="small" style="width: 120px">
           <el-option v-for="(label, key) in sourceMap" :key="key" :label="label" :value="key" />
         </el-select>
@@ -488,7 +493,7 @@ const page = ref(1);
 const pageSize = 20;
 const range = ref<[Date, Date] | null>(null);
 // keyword: 备注/对方/单号/类型/状态等模糊匹配，由后端 bills 查询支持
-const filters = reactive<{ source?: string; categoryId?: string; billType?: string; keyword?: string }>({});
+const filters = reactive<{ source?: string; categoryId?: string; billType?: string; keyword?: string; minAmount?: number | null; maxAmount?: number | null }>({});
 const sort = ref<{ prop: string; order: 'ascending' | 'descending' } | null>(null);
 const accounts = ref<any[]>([]);
 const categories = ref<any[]>([]);
@@ -583,6 +588,15 @@ function toggleCardSelected(row: any, checked: boolean) {
   }
 }
 
+// 金额筛选入参统一为「分」；未填/非法值返回 null 表示不加该条件。
+// 语义上按「金额大小」筛，与列表展示一致（不看支出为负、收入为正的方向）。
+function toCentsParam(v?: number | null): string | null {
+  if (v === null || v === undefined || (v as unknown) === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return yuanToCentsStr(Math.abs(n));
+}
+
 async function load(p = 1) {
   page.value = p;
   const params: any = { page: p, pageSize };
@@ -590,6 +604,10 @@ async function load(p = 1) {
   if (filters.categoryId) params.categoryId = filters.categoryId;
   if (filters.billType) params.billType = filters.billType;
   if (filters.keyword && filters.keyword.trim()) params.keyword = filters.keyword.trim();
+  const minCents = toCentsParam(filters.minAmount);
+  const maxCents = toCentsParam(filters.maxAmount);
+  if (minCents !== null) params.minAmountCents = minCents;
+  if (maxCents !== null) params.maxAmountCents = maxCents;
   if (range.value && range.value[0] && range.value[1]) {
     params.start = range.value[0].toISOString();
     params.end = range.value[1].toISOString();
@@ -610,7 +628,7 @@ function onSortChange({ prop, order }: { prop: string; order: 'ascending' | 'des
 }
 
 // 筛选条件（日期/来源/分类/收支类型/关键词）变更后自动搜索（防抖 300ms）
-watch([range, () => filters.source, () => filters.categoryId, () => filters.billType, () => filters.keyword], () => {
+watch([range, () => filters.source, () => filters.categoryId, () => filters.billType, () => filters.keyword, () => filters.minAmount, () => filters.maxAmount], () => {
   clearTimeout((load as any)._t);
   (load as any)._t = setTimeout(() => load(1), 300);
 });
@@ -827,6 +845,8 @@ watch(
 <style scoped>
 .bills-card { border-radius: 12px; }
 .filter-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.amount-range { display: flex; align-items: center; gap: 4px; }
+.amount-sep { color: #a8abb2; font-size: 12px; }
 .spacer { flex: 1; }
 .pager { margin-top: 12px; justify-content: flex-end; }
 .expense { color: #e6a23c; font-weight: 600; }
