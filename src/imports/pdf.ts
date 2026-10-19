@@ -30,3 +30,56 @@ export function extractPdfTexts(bytes: Uint8Array): string[] {
   }
   return texts;
 }
+
+/** 十六进制串按 UTF-16BE 解码（一个字形可能映射到多个字符，如连字） */
+function hexToUnicode(hex: string): string {
+  let s = '';
+  const h = hex.length % 4 === 0 ? hex : hex.padStart(Math.ceil(hex.length / 4) * 4, '0');
+  for (let i = 0; i + 4 <= h.length; i += 4) {
+    s += String.fromCharCode(parseInt(h.slice(i, i + 4), 16));
+  }
+  return s;
+}
+
+/**
+ * 解析 PDF 内嵌的 ToUnicode CMap（CID -> Unicode）。
+ *
+ * 建行信用卡明细 PDF 存在两种字体形态：
+ * 1) `/Encoding /UniGB-UCS2-H`：文本本身即 UTF-16BE，可直接解码；
+ * 2) `/Encoding /Identity-H` + `/ToUnicode`：文本是**子集字体的字形号(CID)**，与字符编码无关
+ *    （例如该字体里 'A' 的 CID 可能是 0x0024），必须查 CMap 才能还原，否则解出的是乱码。
+ *
+ * 同一 PDF 内若有多套 CMap 会被合并；本函数面向单字体（F1）的建行账单，够用。
+ */
+export function buildToUnicodeMap(texts: string[]): Map<number, string> | null {
+  const map = new Map<number, string>();
+  for (const block of texts) {
+    if (!block.includes('begincmap')) continue;
+
+    // beginbfchar：<src> <dst>
+    for (const cb of block.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
+      for (const pair of cb[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g)) {
+        map.set(parseInt(pair[1], 16), hexToUnicode(pair[2]));
+      }
+    }
+
+    // beginbfrange：<lo> <hi> <dst>  或  <lo> <hi> [<d1> <d2> ...]
+    for (const rb of block.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
+      const lineRe = /<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*(?:<([0-9a-fA-F]+)>|\[([\s\S]*?)\])/g;
+      for (const rm of rb[1].matchAll(lineRe)) {
+        const lo = parseInt(rm[1], 16);
+        const hi = parseInt(rm[2], 16);
+        if (!(hi >= lo) || hi - lo > 0xffff) continue;
+        if (rm[3] !== undefined) {
+          // 目标码位连续递增（取低 16 位作为起始码位）
+          const base = parseInt(rm[3].slice(-4), 16);
+          for (let c = lo; c <= hi; c++) map.set(c, String.fromCharCode(base + (c - lo)));
+        } else {
+          const list = [...String(rm[4]).matchAll(/<([0-9a-fA-F]+)>/g)].map((x) => hexToUnicode(x[1]));
+          for (let c = lo; c <= hi; c++) map.set(c, list[c - lo] ?? '');
+        }
+      }
+    }
+  }
+  return map.size ? map : null;
+}

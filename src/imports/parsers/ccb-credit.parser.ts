@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import { BaseParser } from '../base';
 import type { ReducedParse } from '../base';
 import type { NormalizedBill } from '../types';
-import { extractPdfTexts } from '../pdf';
+import { extractPdfTexts, buildToUnicodeMap } from '../pdf';
 import { decodeGbk } from '../encoding';
 
 // 建行信用卡交易明细 PDF（文本型）或导出的 Excel
@@ -31,8 +31,10 @@ export class CcbCreditParser extends BaseParser {
 
     if (lower.endsWith('.pdf')) {
       // PDF: 文本流提取（中文摘要无法还原时置空）；坐标定位无法按列名映射
-      const text = extractPdfTexts(bytes).join('\n');
-      this.parsePdfText(text, bills, skipped, (v) => (cardNumber = v));
+      // Identity-H 子集字体的文本是字形号(CID)，需先用内嵌 ToUnicode CMap 还原
+      const streams = extractPdfTexts(bytes);
+      const cidMap = buildToUnicodeMap(streams);
+      this.parsePdfText(streams.join('\n'), bills, skipped, (v) => (cardNumber = v), cidMap);
     } else {
       // Excel 兜底：支持用户字段映射
       const wb = XLSX.read(bytes, { type: 'array' });
@@ -117,9 +119,25 @@ export class CcbCreditParser extends BaseParser {
     }
   }
 
-  // 解码 PDF Tj 文本：该 PDF 使用 /STSong-Light-UniGB-UCS2-H 字体（UTF-16BE）
-  // 以 UTF-16BE 为主；若控制字符占比过高（非 UCS2 文本）则回退 GBK
-  private decodePdfText(bytes: number[]): string {
+  // 解码 PDF Tj 文本：兼容建行两种字体形态
+  // 1) Identity-H 子集字体：字节为 2 字节 CID，必须查 ToUnicode CMap（cidMap）还原
+  // 2) /STSong-Light-UniGB-UCS2-H：以 UTF-16BE 为主；若控制字符占比过高（非 UCS2 文本）则回退 GBK
+  private decodePdfText(bytes: number[], cidMap?: Map<number, string> | null): string {
+    // Identity-H：按 CID 查表。可映射比例足够高才认定是该形态，避免误伤 UCS2/GBK 文本
+    if (cidMap && cidMap.size > 0 && bytes.length >= 2 && bytes.length % 2 === 0) {
+      let mapped = 0;
+      let cidText = '';
+      for (let i = 0; i + 1 < bytes.length; i += 2) {
+        const cid = ((bytes[i] & 0xff) << 8) | (bytes[i + 1] & 0xff);
+        const ch = cidMap.get(cid);
+        if (ch === undefined) cidText += '\ufffd';
+        else {
+          mapped++;
+          cidText += ch;
+        }
+      }
+      if (mapped / (bytes.length / 2) >= 0.9) return cidText;
+    }
     let u16 = '';
     let ctrl = 0;
     for (let i = 0; i + 1 < bytes.length; i += 2) {
@@ -136,6 +154,7 @@ export class CcbCreditParser extends BaseParser {
     bills: NormalizedBill[],
     skipped: { row: number; reason: string; raw?: unknown }[],
     onCard?: (v: string) => void,
+    cidMap?: Map<number, string> | null,
   ): void {
     // 建行信用卡 PDF 为坐标定位文本：每条文本用 "1 0 0 1 x y Tm" 定位 + "(...)Tj" 输出。
     // ASCII 字符以 UTF-16BE(\u0000X) 混排，中文为 GBK 字节。策略：解析坐标后按 y 聚行、按 x 分列重建表格。
@@ -193,7 +212,7 @@ export class CcbCreditParser extends BaseParser {
           }
           bytes.push(code);
         }
-        items.push({ x: curX, y: curY, text: this.decodePdfText(bytes) });
+        items.push({ x: curX, y: curY, text: this.decodePdfText(bytes, cidMap) });
       }
     }
 
