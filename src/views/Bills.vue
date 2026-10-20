@@ -208,6 +208,7 @@
           <el-radio-group v-model="form.billType">
             <el-radio value="expense">支出</el-radio>
             <el-radio value="income">收入</el-radio>
+            <el-radio value="neutral">不计收支</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="金额(元)">
@@ -639,7 +640,7 @@ const editId = ref<string | null>(null);
 function openEdit(row: any) {
   editId.value = row.id;
   Object.assign(form, {
-    billType: row.billType === 'neutral' ? 'expense' : row.billType,
+    billType: row.billType || 'expense',
     yuan: Math.abs(Number(row.amount)) / 100,
     categoryId: row.categoryId ? Number(row.categoryId) : undefined,
     accountId: row.accountId ? Number(row.accountId) : undefined,
